@@ -1,0 +1,204 @@
+import { StackQueue } from "@/components/diagrams/StackQueue";
+
+## 왜 이 장인가
+
+스택, 큐, 힙은 "데이터를 어떤 순서로 꺼낼 것인가"를 결정하는 **세 가지 줄 서기 방식**이다.
+
+- **스택 (LIFO)**: 마지막에 들어온 것이 먼저 나온다
+- **큐 (FIFO)**: 먼저 들어온 것이 먼저 나온다
+- **힙 (Priority)**: 우선순위가 가장 높은 것이 먼저 나온다
+
+이 세 가지로 알고리즘의 절반 이상이 구성된다. DFS는 스택, BFS는 큐, 다익스트라/A*는 힙.
+
+## § 1 · 스택 — 콜 스택의 바로 그것
+
+스택은 한쪽 끝에서만 넣고 뺀다. 가장 익숙한 예는 **콜 스택**이다. 함수가 호출되면 프레임이 쌓이고, 리턴하면 가장 위가 빠진다.
+
+<StackQueue />
+
+FE 실무에서의 대표 예:
+
+- **브라우저 히스토리** — 뒤로 가기는 스택 pop
+- **Undo/Redo** — 두 스택을 왔다갔다
+- **괄호 검증** — 여는 괄호를 push, 닫는 괄호에서 pop해 짝 맞추기
+- **DOM 순회의 DFS 구현** — 재귀 대신 명시적 스택
+
+```js
+// 괄호 검증
+function isBalanced(s) {
+  const pair = { ')': '(', ']': '[', '}': '{' };
+  const stack = [];
+  for (const ch of s) {
+    if ('([{'.includes(ch)) stack.push(ch);
+    else if (')]}'.includes(ch)) {
+      if (stack.pop() !== pair[ch]) return false;
+    }
+  }
+  return stack.length === 0;
+}
+```
+
+JS 배열의 `push`/`pop`이 이미 스택이다. 별도 구조 없이 그냥 배열을 스택으로 쓴다.
+
+## § 2 · 큐 — 이벤트 루프의 태스크 큐
+
+큐는 한쪽에서 넣고 **반대쪽**에서 뺀다. 들어온 순서 그대로 처리된다.
+
+FE 실무에서 가장 중요한 큐는 **이벤트 루프의 태스크 큐**다. `setTimeout`, DOM 이벤트, 네트워크 콜백은 모두 큐에 쌓였다가 순서대로 실행된다(2단계에서 심화).
+
+알고리즘에서는 **BFS(너비 우선 탐색)**의 기반이다.
+
+```js
+// BFS로 최단 거리
+function shortestPath(graph, start, target) {
+  const queue = [[start, 0]];
+  const visited = new Set([start]);
+  while (queue.length > 0) {
+    const [node, dist] = queue.shift();   // ← 여기가 O(n)!
+    if (node === target) return dist;
+    for (const next of graph[node]) {
+      if (!visited.has(next)) {
+        visited.add(next);
+        queue.push([next, dist + 1]);
+      }
+    }
+  }
+  return -1;
+}
+```
+
+> 위 코드의 `queue.shift()`는 **O(n)**이라 `n`이 커지면 전체가 O(n²)이 된다. 진지한 BFS에서는 `shift` 대신 **인덱스 포인터**를 쓰거나 **연결 리스트 기반 큐**를 쓴다.
+
+```js
+let head = 0;
+// push로 넣고
+queue.push(item);
+// shift 대신 인덱스만 올림
+const item = queue[head++];
+```
+
+## § 3 · 덱(Deque) — 양쪽에서 넣고 빼기
+
+덱(double-ended queue)은 양 끝에서 모두 O(1). 대표 응용은 **슬라이딩 윈도우 최댓값**이다.
+
+```js
+// 창 크기 k에서 각 창의 최댓값
+function maxInWindow(arr, k) {
+  const dq = [];        // 인덱스를 저장, arr 값은 단조 감소하도록 유지
+  const result = [];
+  for (let i = 0; i < arr.length; i++) {
+    // 왼쪽 밖으로 나간 인덱스 제거
+    if (dq.length && dq[0] <= i - k) dq.shift();
+    // 현재보다 작은 꼬리는 쓸모없으니 제거
+    while (dq.length && arr[dq[dq.length - 1]] <= arr[i]) dq.pop();
+    dq.push(i);
+    if (i >= k - 1) result.push(arr[dq[0]]);
+  }
+  return result;
+}
+```
+
+각 원소가 덱에 **한 번 들어오고 한 번 나가므로** 전체 O(n).
+
+## § 4 · 힙과 우선순위 큐 (★ 직접 구현)
+
+힙은 "다음에 꺼낼 것은 가장 작은/큰 것"을 보장한다. **이진 힙**은 배열로 구현하는 완전 이진 트리다.
+
+<div className="diagram-frame">
+  <svg viewBox="0 0 520 280" className="w-full h-auto" xmlns="http://www.w3.org/2000/svg">
+    {/* nodes */}
+    {[
+      { x: 260, y: 40,  val: 1, i: 0 },
+      { x: 160, y: 110, val: 3, i: 1 },
+      { x: 360, y: 110, val: 6, i: 2 },
+      { x: 90,  y: 180, val: 5, i: 3 },
+      { x: 210, y: 180, val: 9, i: 4 },
+      { x: 310, y: 180, val: 8, i: 5 },
+      { x: 410, y: 180, val: 7, i: 6 },
+    ].map((n, idx) => (
+      <g key={idx}>
+        <circle cx={n.x} cy={n.y} r={24} fill="#faf6eb" stroke="#1d1913" strokeWidth={1.4} />
+        <text x={n.x} y={n.y + 5} textAnchor="middle" fontFamily="var(--font-display)" fontStyle="italic" fontSize={18} fill="#8f2d20">{n.val}</text>
+        <text x={n.x} y={n.y - 32} textAnchor="middle" fontFamily="var(--font-hand)" fontSize={13} fill="#7a6e57">[{n.i}]</text>
+      </g>
+    ))}
+    {/* edges */}
+    <line x1="260" y1="60"  x2="160" y2="90"  stroke="#1d1913" strokeWidth={1.2} opacity={0.6} />
+    <line x1="260" y1="60"  x2="360" y2="90"  stroke="#1d1913" strokeWidth={1.2} opacity={0.6} />
+    <line x1="160" y1="130" x2="90"  y2="160" stroke="#1d1913" strokeWidth={1.2} opacity={0.6} />
+    <line x1="160" y1="130" x2="210" y2="160" stroke="#1d1913" strokeWidth={1.2} opacity={0.6} />
+    <line x1="360" y1="130" x2="310" y2="160" stroke="#1d1913" strokeWidth={1.2} opacity={0.6} />
+    <line x1="360" y1="130" x2="410" y2="160" stroke="#1d1913" strokeWidth={1.2} opacity={0.6} />
+    {/* array */}
+    <text x={30} y={250} fill="#7a6e57" fontFamily="var(--font-hand)" fontSize={16}>배열 저장:</text>
+    <text x={120} y={250} fill="#1d1913" fontFamily="var(--font-mono)" fontSize={14}>[1, 3, 6, 5, 9, 8, 7]</text>
+  </svg>
+  <figcaption className="diagram-caption">Min-heap — 부모 ≤ 자식, 완전 이진 트리라 배열로 담긴다</figcaption>
+</div>
+
+배열 인덱스 규칙:
+
+- 부모: `(i - 1) >> 1`
+- 왼쪽 자식: `2i + 1`
+- 오른쪽 자식: `2i + 2`
+
+**삽입**: 끝에 추가하고 **위로 올라가며** 부모와 비교(siftUp). **추출**: 루트를 꺼내고 마지막 요소를 루트에 놓은 뒤 **아래로 내려가며** 자식과 비교(siftDown). 둘 다 O(log n).
+
+```js
+class MinHeap {
+  heap = [];
+
+  push(v) {
+    this.heap.push(v);
+    this.#siftUp(this.heap.length - 1);
+  }
+
+  pop() {
+    if (this.heap.length === 0) return undefined;
+    const top = this.heap[0];
+    const last = this.heap.pop();
+    if (this.heap.length > 0) {
+      this.heap[0] = last;
+      this.#siftDown(0);
+    }
+    return top;
+  }
+
+  #siftUp(i) {
+    while (i > 0) {
+      const parent = (i - 1) >> 1;
+      if (this.heap[parent] <= this.heap[i]) break;
+      [this.heap[parent], this.heap[i]] = [this.heap[i], this.heap[parent]];
+      i = parent;
+    }
+  }
+
+  #siftDown(i) {
+    const n = this.heap.length;
+    while (true) {
+      const l = 2 * i + 1, r = 2 * i + 2;
+      let smallest = i;
+      if (l < n && this.heap[l] < this.heap[smallest]) smallest = l;
+      if (r < n && this.heap[r] < this.heap[smallest]) smallest = r;
+      if (smallest === i) break;
+      [this.heap[smallest], this.heap[i]] = [this.heap[i], this.heap[smallest]];
+      i = smallest;
+    }
+  }
+}
+```
+
+**대표 응용**:
+
+- **Top-K** — 작은 원소 K개만 유지하며 나머지는 버림
+- **다익스트라 최단 경로** — 다음에 볼 노드를 "가장 가까운 노드"로 뽑기
+- **이벤트 스케줄러** — "다음에 실행될 이벤트" 우선순위
+
+## § 5 · 체크포인트
+
+- [ ] 스택과 큐의 차이를 "콜 스택 vs 이벤트 루프 태스크 큐"로 설명할 수 있다
+- [ ] `queue.shift()`가 왜 숨은 O(n) 함정인지 안다
+- [ ] 덱의 양쪽 O(1)이 슬라이딩 윈도우 최댓값 문제를 어떻게 푸는지 이해한다
+- [ ] 이진 힙을 배열로 구현할 때 부모·자식 인덱스 공식을 외우고 있다
+- [ ] siftUp / siftDown의 비교 방향과 멈추는 조건을 설명할 수 있다
+- [ ] 다익스트라가 왜 힙을 써야 하는지(정렬된 순서로 다음 노드를 꺼내야 하므로)를 안다
