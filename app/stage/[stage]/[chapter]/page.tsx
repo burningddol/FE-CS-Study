@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { TopBar } from "@/components/TopBar";
 import { CurriculumSidebar } from "@/components/CurriculumSidebar";
@@ -23,6 +24,36 @@ export const dynamicParams = false;
 
 interface ChapterPageProps {
   params: Promise<{ stage: string; chapter: string }>;
+}
+
+export async function generateMetadata(
+  { params }: ChapterPageProps,
+): Promise<Metadata> {
+  const { stage: stageSlug, chapter: chapterId } = await params;
+  const found = findChapter(stageSlug, chapterId);
+  if (!found || !found.chapter.hasContent) return {};
+
+  const { stage, chapter } = found;
+  const title = `${chapter.num} ${chapter.title}`;
+  const ogTitle = `${title} · ${stage.stageLabel}`;
+  const url = `/stage/${stage.slug}/${chapter.id}`;
+
+  return {
+    title,
+    description: chapter.sub,
+    alternates: { canonical: url },
+    openGraph: {
+      type: "article",
+      url,
+      title: ogTitle,
+      description: chapter.sub,
+    },
+    twitter: {
+      card: "summary_large_image",
+      title: ogTitle,
+      description: chapter.sub,
+    },
+  };
 }
 
 export default async function ChapterPage({ params }: ChapterPageProps) {

@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Nav } from "@/components/Nav";
@@ -12,6 +13,34 @@ export function generateStaticParams() {
 
 interface StagePageProps {
   params: Promise<{ stage: string }>;
+}
+
+export async function generateMetadata(
+  { params }: StagePageProps,
+): Promise<Metadata> {
+  const { stage: stageSlug } = await params;
+  const stage = findStage(stageSlug);
+  if (!stage) return {};
+
+  const title = `${stage.stageLabel} · ${stage.title}`;
+  const url = `/stage/${stage.slug}`;
+
+  return {
+    title,
+    description: stage.overview,
+    alternates: { canonical: url },
+    openGraph: {
+      type: "article",
+      url,
+      title,
+      description: stage.overview,
+    },
+    twitter: {
+      card: "summary_large_image",
+      title,
+      description: stage.overview,
+    },
+  };
 }
 
 function totalDurationMinutes(chapters: { duration: string }[]): number {
