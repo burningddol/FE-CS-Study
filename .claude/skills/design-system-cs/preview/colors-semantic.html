@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><title>Colors — Semantic</title>
+<link rel="stylesheet" href="../colors_and_type.css">
+<link rel="stylesheet" href="../tokens.css">
+<style>
+  body{margin:0;padding:20px;background:var(--bg);font-family:var(--font-sans)}
+  .grid{display:grid;grid-template-columns:repeat(5,1fr);gap:10px}
+  .cell{border:1px solid var(--border-subtle);border-radius:12px;overflow:hidden;background:#fff}
+  .sw{height:56px;display:flex;align-items:center;justify-content:center;color:#fff;font-family:var(--font-mono);font-weight:700;font-size:12px}
+  .meta{padding:8px 10px}
+  .t{font-size:12px;font-weight:700;color:#27272A}
+  .h{font-family:var(--font-mono);font-size:10px;color:#71717A;margin-top:2px}
+</style></head><body>
+<div class="grid">
+  <div class="cell"><div class="sw" style="background:#4F46E5">Primary</div><div class="meta"><div class="t">Primary</div><div class="h">#4F46E5</div></div></div>
+  <div class="cell"><div class="sw" style="background:#F59E0B">Accent</div><div class="meta"><div class="t">Accent</div><div class="h">#F59E0B</div></div></div>
+  <div class="cell"><div class="sw" style="background:#10B981">Success</div><div class="meta"><div class="t">Success</div><div class="h">#10B981</div></div></div>
+  <div class="cell"><div class="sw" style="background:#EF4444">Danger</div><div class="meta"><div class="t">Danger</div><div class="h">#EF4444</div></div></div>
+  <div class="cell"><div class="sw" style="background:#3B82F6">Info</div><div class="meta"><div class="t">Info</div><div class="h">#3B82F6</div></div></div>
+</div>
+</body></html>

@@ -1,0 +1,589 @@
+
+> **목표**: **SELECT 문법, JOIN, GROUP BY, 서브쿼리, 윈도우 함수** 를 이해하고 기본적인 데이터 분석·백엔드 디버깅을 할 수 있어야 한다. FE 개발자라도 DB에서 직접 데이터를 뽑을 줄 알면 개발 속도가 배가된다.
+
+---
+
+## 0. SQL이 뭐고 왜 이런 모양인가 — 초심자용
+
+### 0-1. SQL = "표 창고에 말 거는 언어"
+
+SQL (Structured Query Language) 은 관계형 DB와 대화하는 **표준 언어**다. JS로 배열을 다루는 것과 비슷한데, 대상이 **수백만 행의 테이블**일 뿐.
+
+JS로 중복 제거하려면:
+```js
+const unique = [...new Set(users.map(u => u.email))];
+```
+
+SQL로 같은 일:
+```sql
+SELECT DISTINCT email FROM users;
+```
+
+**SQL은 "어떻게"가 아니라 "뭘 원하는지"만 말하는 선언형 언어다.** DB가 알아서 가장 효율적인 방법을 찾아 실행한다.
+
+### 0-2. SQL 4가지 큰 분류 (CRUD)
+
+| 명령어 | 하는 일 | JS 배열 대응 |
+|---|---|---|
+| **SELECT** | 조회 | `filter`, `map`, `find` |
+| **INSERT** | 추가 | `push` |
+| **UPDATE** | 수정 | `arr[i] = ...` |
+| **DELETE** | 삭제 | `splice`, `filter` |
+
+실무에서 **SELECT가 70~80%**. 이 장도 대부분 SELECT를 다룬다.
+
+### 0-3. 초보자가 SQL에서 가장 헷갈리는 3가지
+
+이 장을 읽기 전에 미리 인지해두면 좋은 것들.
+
+1. **작성 순서 ≠ 실행 순서**: `SELECT ... FROM ... WHERE ...` 으로 쓰지만, DB는 `FROM → WHERE → SELECT` 순으로 처리. 그래서 `WHERE`에서 `SELECT` 별칭 못 씀.
+
+2. **JOIN은 그림으로 이해해야 함**: INNER, LEFT, RIGHT, FULL — 벤다이어그램 없이는 말로만 외우기 어려움.
+
+3. **NULL은 "값이 없음"이지 0이 아님**: `WHERE x = NULL`은 항상 false. `WHERE x IS NULL` 을 써야 함.
+
+### 0-4. FE 개발자가 SQL을 직접 치는 상황
+
+- **로컬 DB 조회**: 개발 중 특정 유저의 상태 확인
+- **로그 분석**: "이 시간대에 에러 낸 유저 목록" 같은 추출
+- **데이터 마이그레이션**: 스키마 변경 시 기존 데이터 옮기기
+- **관리자 페이지**: "지난 주 가입자 통계" 같은 화면 구현
+
+BE가 다 해주길 기다리기보다, **간단한 SELECT는 직접 치는 게 훨씬 빠르다.**
+
+### 0-5. 이 장이 끝나면 할 수 있는 것
+
+```sql
+-- "지난 30일간 주문 금액 상위 10명과 그 주문 수"
+SELECT u.name, COUNT(o.id) AS order_count, SUM(o.amount) AS total
+FROM users u
+JOIN orders o ON o.user_id = u.id
+WHERE o.created_at >= NOW() - INTERVAL '30 days'
+GROUP BY u.id, u.name
+ORDER BY total DESC
+LIMIT 10;
+```
+
+이 정도 쿼리를 **읽고 직접 쓸 수 있는** 수준이 목표.
+
+---
+
+## 1. SQL의 실행 순서
+
+작성 순서와 **실제 실행 순서가 다르다**.
+
+```sql
+SELECT   column_list          -- 5
+FROM     table                -- 1
+WHERE    condition            -- 2
+GROUP BY column               -- 3
+HAVING   condition            -- 4
+ORDER BY column               -- 6
+LIMIT    N                    -- 7
+```
+
+→ `WHERE` 에서 SELECT 에서 만든 별칭(alias)을 쓸 수 없는 이유.
+
+---
+
+## 2. 기본 SELECT
+
+```sql
+SELECT id, email, created_at
+FROM users
+WHERE created_at >= '2026-01-01'
+  AND email LIKE '%@company.com'
+ORDER BY created_at DESC
+LIMIT 100;
+```
+
+### 연산자
+
+| 종류 | 예 |
+|------|-----|
+| 비교 | `=`, `<>`, `<`, `>`, `<=`, `>=` |
+| 범위 | `BETWEEN 1 AND 10` |
+| 집합 | `IN (1, 2, 3)`, `NOT IN (...)` |
+| 패턴 | `LIKE 'a%'`, `ILIKE` (대소문자 무시, PostgreSQL) |
+| NULL | `IS NULL`, `IS NOT NULL` |
+| 논리 | `AND`, `OR`, `NOT` |
+
+### NULL의 함정
+
+```sql
+WHERE email = NULL         -- ❌ 항상 false
+WHERE email IS NULL        -- ✅
+WHERE email <> 'x' AND ...  -- ❌ NULL 행 제외됨
+```
+
+NULL은 "알 수 없음"이므로 모든 연산 결과가 NULL.
+
+---
+
+## 3. JOIN 완전 정복
+
+```sql
+-- INNER JOIN — 양쪽 모두 매칭되는 행만
+SELECT u.name, o.amount
+FROM users u
+INNER JOIN orders o ON o.user_id = u.id;
+
+-- LEFT JOIN — 왼쪽 전부, 오른쪽은 매칭되면
+SELECT u.name, o.amount
+FROM users u
+LEFT JOIN orders o ON o.user_id = u.id;
+-- 주문 없는 유저도 나옴 (o.amount = NULL)
+
+-- RIGHT JOIN — 반대
+-- FULL OUTER JOIN — 양쪽 모두, 매칭 안 되면 NULL
+-- CROSS JOIN — 카티시안 곱 (조심!)
+```
+
+### JOIN 시각화
+
+```
+users              orders
+┌──────┐           ┌──────────┐
+│ 1 A  │           │ o1 u=1  │
+│ 2 B  │           │ o2 u=1  │
+│ 3 C  │           │ o3 u=3  │
+└──────┘           └──────────┘
+
+INNER:       LEFT:         FULL:
+A-o1         A-o1          A-o1
+A-o2         A-o2          A-o2
+C-o3         B-NULL        B-NULL
+             C-o3          C-o3
+```
+
+### JOIN 조건 vs WHERE
+
+```sql
+-- 다름!
+SELECT * FROM a LEFT JOIN b ON a.id = b.a_id AND b.status = 'active';
+-- ON절의 조건은 조인 단계에서 필터, LEFT의 왼쪽은 유지
+
+SELECT * FROM a LEFT JOIN b ON a.id = b.a_id WHERE b.status = 'active';
+-- WHERE는 조인 후 필터 → LEFT JOIN이 사실상 INNER JOIN이 됨
+```
+
+---
+
+## 4. GROUP BY와 집계
+
+```sql
+SELECT
+  category,
+  COUNT(*) AS total,
+  SUM(price) AS revenue,
+  AVG(price) AS avg_price,
+  MAX(price) AS max_price,
+  MIN(price) AS min_price
+FROM products
+GROUP BY category
+HAVING COUNT(*) > 10           -- 집계 후 필터
+ORDER BY revenue DESC;
+```
+
+### WHERE vs HAVING
+
+- **WHERE**: GROUP BY 전, 행 필터
+- **HAVING**: GROUP BY 후, 그룹 필터
+
+### DISTINCT 집계
+
+```sql
+SELECT COUNT(DISTINCT user_id) FROM orders;
+```
+
+### 주요 함수
+
+| 함수 | 설명 |
+|------|------|
+| `COUNT(*)` | NULL 포함 전체 |
+| `COUNT(col)` | col NULL 제외 |
+| `SUM`, `AVG`, `MIN`, `MAX` | 표준 집계 |
+| `STRING_AGG(col, ',')` | 문자열 연결 (PG) |
+| `ARRAY_AGG(col)` | 배열 집계 (PG) |
+| `JSON_AGG(row)` | JSON 배열 집계 (PG) |
+
+---
+
+## 5. 서브쿼리
+
+### 스칼라 서브쿼리 (한 값)
+
+```sql
+SELECT name, (SELECT COUNT(*) FROM orders WHERE user_id = u.id) AS cnt
+FROM users u;
+```
+
+### IN / EXISTS
+
+```sql
+-- 주문 있는 유저
+SELECT * FROM users
+WHERE id IN (SELECT user_id FROM orders);
+
+-- EXISTS — 보통 더 빠름
+SELECT * FROM users u
+WHERE EXISTS (SELECT 1 FROM orders WHERE user_id = u.id);
+```
+
+### FROM 절 서브쿼리 (derived table)
+
+```sql
+SELECT category, avg_price
+FROM (
+  SELECT category, AVG(price) AS avg_price
+  FROM products
+  GROUP BY category
+) AS t
+WHERE avg_price > 100;
+```
+
+### CTE (Common Table Expression)
+
+```sql
+WITH recent_orders AS (
+  SELECT * FROM orders WHERE created_at >= now() - interval '30 days'
+),
+top_users AS (
+  SELECT user_id, SUM(amount) AS total
+  FROM recent_orders
+  GROUP BY user_id
+  ORDER BY total DESC
+  LIMIT 10
+)
+SELECT u.name, t.total
+FROM top_users t
+JOIN users u ON u.id = t.user_id;
+```
+
+가독성 ↑. PostgreSQL은 **WITH RECURSIVE** 로 재귀 쿼리도 가능.
+
+---
+
+## 6. 윈도우 함수
+
+집계하되 **행은 유지**. 순위·이동 평균·누적합에 필수.
+
+```sql
+SELECT
+  name,
+  salary,
+  department,
+  AVG(salary) OVER (PARTITION BY department) AS dept_avg,
+  RANK() OVER (PARTITION BY department ORDER BY salary DESC) AS rank_in_dept,
+  salary - LAG(salary) OVER (ORDER BY salary) AS diff_from_prev
+FROM employees;
+```
+
+### 주요 윈도우 함수
+
+| 함수 | 설명 |
+|------|------|
+| `ROW_NUMBER()` | 행 번호 (동점 없음) |
+| `RANK()` | 동점 같은 순위, 다음 순위 점프 |
+| `DENSE_RANK()` | 동점 같은 순위, 다음 순위 연속 |
+| `LAG(col, n)` | n행 앞 값 |
+| `LEAD(col, n)` | n행 뒤 값 |
+| `FIRST_VALUE`, `LAST_VALUE` | 윈도우 첫/마지막 값 |
+| `SUM() OVER (ORDER BY ...)` | 누적합 |
+| `AVG() OVER (ROWS BETWEEN 6 PRECEDING AND CURRENT ROW)` | 7일 이동평균 |
+
+### PARTITION BY vs GROUP BY
+
+- GROUP BY: 행을 축소
+- PARTITION BY: 행 유지, 그룹 내 집계를 각 행에 덧붙임
+
+---
+
+## 7. INSERT / UPDATE / DELETE
+
+```sql
+-- INSERT
+INSERT INTO users (email, name) VALUES ('a@x.com', 'Alice');
+
+-- 여러 행
+INSERT INTO users (email, name) VALUES
+  ('a@x.com', 'Alice'),
+  ('b@x.com', 'Bob');
+
+-- INSERT ... SELECT
+INSERT INTO archive SELECT * FROM orders WHERE created_at < '2023-01-01';
+
+-- UPDATE
+UPDATE users SET last_login = now() WHERE id = 1;
+
+-- UPDATE FROM JOIN (PostgreSQL)
+UPDATE orders o
+SET status = 'cancelled'
+FROM users u
+WHERE o.user_id = u.id AND u.deleted_at IS NOT NULL;
+
+-- DELETE
+DELETE FROM sessions WHERE expires_at < now();
+
+-- UPSERT (PostgreSQL)
+INSERT INTO users (id, email)
+VALUES (1, 'a@x.com')
+ON CONFLICT (id)
+DO UPDATE SET email = EXCLUDED.email;
+```
+
+### ⚠️ WHERE 없는 UPDATE/DELETE
+
+**전체 테이블이 영향** 받는다. 실행 전 반드시 `SELECT COUNT(*) WHERE ...` 로 확인.
+
+---
+
+## 8. DDL (스키마 정의)
+
+```sql
+CREATE TABLE orders (
+  id BIGSERIAL PRIMARY KEY,
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  amount NUMERIC(10, 2) NOT NULL CHECK (amount >= 0),
+  status VARCHAR(20) NOT NULL DEFAULT 'pending',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (user_id, created_at)
+);
+
+ALTER TABLE orders ADD COLUMN note TEXT;
+ALTER TABLE orders DROP COLUMN note;
+ALTER TABLE orders RENAME COLUMN status TO state;
+
+CREATE INDEX idx_orders_user ON orders(user_id);
+DROP INDEX idx_orders_user;
+
+DROP TABLE orders;
+```
+
+### 제약 조건
+
+- `PRIMARY KEY` — 유일 + NOT NULL
+- `UNIQUE` — 중복 금지
+- `NOT NULL`
+- `CHECK (expr)` — 임의 조건
+- `REFERENCES` — 외래키, `ON DELETE CASCADE/RESTRICT/SET NULL`
+
+---
+
+## 9. 자주 쓰는 날짜/문자열 함수
+
+### PostgreSQL
+
+```sql
+-- 날짜
+SELECT now(), current_date, current_time;
+SELECT age('2026-04-19', '1995-12-11');
+SELECT date_trunc('month', created_at);
+SELECT extract(year from created_at);
+SELECT created_at + interval '7 days';
+
+-- 문자열
+SELECT upper(name), lower(name), length(name);
+SELECT substring(name, 1, 3);
+SELECT trim(' hello '), lpad('1', 3, '0');
+SELECT split_part('a,b,c', ',', 2);
+SELECT regexp_replace(email, '@.*$', '@redacted');
+
+-- JSON
+SELECT data->'user'->>'name' FROM logs;
+SELECT jsonb_build_object('a', 1, 'b', 2);
+```
+
+---
+
+## 10. 실행 계획 — EXPLAIN
+
+```sql
+EXPLAIN ANALYZE
+SELECT u.name, COUNT(o.id)
+FROM users u
+LEFT JOIN orders o ON o.user_id = u.id
+WHERE u.created_at >= '2026-01-01'
+GROUP BY u.name;
+```
+
+출력 예:
+```
+HashAggregate  (cost=... rows=...)
+  ->  Hash Left Join  (cost=...)
+        Hash Cond: (o.user_id = u.id)
+        ->  Seq Scan on orders o  (cost=...)
+        ->  Hash
+              ->  Index Scan using idx_users_created_at on users u
+                    Index Cond: (created_at >= '2026-01-01')
+```
+
+### 읽는 법
+
+- **Seq Scan**: 전체 테이블 스캔 → 큰 테이블이면 인덱스 검토
+- **Index Scan**: 인덱스 사용 (일반적으로 좋음)
+- **Index Only Scan**: 인덱스로 완결 (커버링 인덱스)
+- **Nested Loop / Hash Join / Merge Join**: 조인 방식
+- **cost=...**: 예측 비용, **actual time=...**: 실제 실행 시간
+- 예측치와 실제가 크게 다르면 통계 갱신 필요 (`ANALYZE`)
+
+---
+
+## 11. SQL 인젝션 방어
+
+```js
+// ❌ 절대 금지 — SQL 인젝션
+const q = `SELECT * FROM users WHERE email = '${userInput}'`;
+
+// ✅ Parameterized Query
+const result = await client.query(
+  'SELECT * FROM users WHERE email = $1',
+  [userInput]
+);
+```
+
+ORM (Prisma, Drizzle, Sequelize) 은 기본적으로 prepared statement 사용.
+
+---
+
+## 12. ⚠️ 자주 하는 실수
+
+| 실수 | 수정 |
+|------|------|
+| `WHERE col = NULL` | `WHERE col IS NULL` |
+| `SELECT *` 남용 | 필요한 컬럼만 — I/O · 네트워크 절약 |
+| `ORDER BY` 없이 `LIMIT` | 결과 순서 보장 안 됨 |
+| `DISTINCT` 로 중복 덮기 | JOIN 문제를 가리는 경우 많음, 원인 분석 필수 |
+| 서브쿼리 안에서 동일 테이블 반복 조인 | CTE로 재사용 |
+| `COUNT(col)` 로 전체 세기 | NULL 제외됨, 전체는 `COUNT(*)` |
+
+---
+
+## 13. 연습 문제
+
+**Q1.** 다음 쿼리의 실행 순서를 번호로 나열하라.
+
+```sql
+SELECT category, COUNT(*)
+FROM products
+WHERE price > 100
+GROUP BY category
+HAVING COUNT(*) > 5
+ORDER BY COUNT(*) DESC;
+```
+
+<details>
+<summary>정답</summary>
+
+1. FROM products
+2. WHERE price > 100
+3. GROUP BY category
+4. HAVING COUNT(*) > 5
+5. SELECT category, COUNT(*)
+6. ORDER BY COUNT(*) DESC
+
+</details>
+
+**Q2.** LEFT JOIN에서 `WHERE b.col = 'x'` 와 `ON a.id = b.a_id AND b.col = 'x'` 의 결과 차이는?
+
+<details>
+<summary>정답</summary>
+
+- `WHERE b.col = 'x'` : 조인 후 필터 → b에 매칭 없는 a의 행도 `b.col = NULL` 이 되어 제외 → **사실상 INNER JOIN 과 동일**
+- `ON ... AND b.col = 'x'`: 조인 단계에서 b 필터, 매칭 안 된 a는 그대로 유지 → **LEFT JOIN의 의도대로 동작**
+
+</details>
+
+**Q3.** 아래 결과에 `RANK()` 와 `DENSE_RANK()` 를 적용하면?
+
+점수: 90, 90, 85, 80
+
+<details>
+<summary>정답</summary>
+
+- `RANK()`: 1, 1, 3, 4
+- `DENSE_RANK()`: 1, 1, 2, 3
+
+RANK는 동점 후 순위가 점프, DENSE_RANK는 연속.
+
+</details>
+
+**Q4.** UPSERT (INSERT or UPDATE) 를 SQL 표준과 PostgreSQL 문법으로 작성하라.
+
+<details>
+<summary>정답</summary>
+
+PostgreSQL:
+```sql
+INSERT INTO users (id, email)
+VALUES (1, 'a@x.com')
+ON CONFLICT (id) DO UPDATE SET email = EXCLUDED.email;
+```
+
+SQL 표준 (MERGE):
+```sql
+MERGE INTO users u
+USING (VALUES (1, 'a@x.com')) AS s(id, email)
+ON u.id = s.id
+WHEN MATCHED THEN UPDATE SET email = s.email
+WHEN NOT MATCHED THEN INSERT (id, email) VALUES (s.id, s.email);
+```
+
+</details>
+
+**Q5.** `EXISTS` 가 `IN (SELECT ...)` 보다 빠른 경우가 많은 이유는?
+
+<details>
+<summary>정답</summary>
+
+`EXISTS` 는 **매칭 한 건만 찾으면 즉시 종료** (short-circuit). `IN` 은 서브쿼리 전체 결과를 수집 후 비교하는 경우가 많다 (옵티마이저가 반안조인으로 변환하면 비슷해짐). 또한 `NOT IN` 은 NULL이 포함되면 예기치 않은 빈 결과를 낸다 — `NOT EXISTS` 가 안전.
+
+</details>
+
+**Q6.** 윈도우 함수로 부서별 급여 상위 3명을 어떻게 뽑는가?
+
+<details>
+<summary>정답</summary>
+
+```sql
+SELECT * FROM (
+  SELECT *,
+    RANK() OVER (PARTITION BY dept ORDER BY salary DESC) AS r
+  FROM employees
+) t
+WHERE r <= 3;
+```
+
+또는 `DENSE_RANK` 로 동점 허용, `ROW_NUMBER` 로 정확히 3명 제한.
+
+</details>
+
+**Q7.** `EXPLAIN ANALYZE` 에서 "Seq Scan" 이 나왔을 때 항상 문제인가?
+
+<details>
+<summary>정답</summary>
+
+아니다:
+- 테이블이 작으면 Seq Scan이 더 빠름 (인덱스 스캔의 random I/O 비용이 높음)
+- 테이블의 **대부분 행을 읽는 쿼리** 는 어차피 전부 봐야 함
+- 통계가 낡으면 옵티마이저가 Seq Scan을 잘못 선택 — `ANALYZE` 실행
+
+큰 테이블에서 **소수 행**만 필요한 쿼리에서 Seq Scan이면 인덱스 필요.
+
+</details>
+
+---
+
+## 14. 체크리스트
+
+- [ ] SQL 실행 순서 (FROM → WHERE → GROUP BY → HAVING → SELECT → ORDER BY → LIMIT) 를 안다
+- [ ] JOIN 5종과 ON vs WHERE의 차이를 안다
+- [ ] 집계 함수와 GROUP BY / HAVING 을 활용한다
+- [ ] CTE와 윈도우 함수를 실전 쿼리에 쓴다
+- [ ] UPSERT, UPDATE FROM JOIN 을 안다
+- [ ] EXPLAIN ANALYZE 를 읽을 수 있다
+- [ ] Prepared Statement로 SQL 인젝션을 방어한다
+
+---
+
+[← 4-1. DB 기초와 선택 기준](4단계-1-DB-기초와-선택-기준) | [4-3. 정규화 →](4단계-3-정규화)

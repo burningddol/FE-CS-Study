@@ -1,156 +1,251 @@
-import { StackQueue } from "@/components/diagrams/StackQueue";
 
-## 왜 이 장인가
+> **LIFO, FIFO, 우선순위**. 세 개의 "줄 서기" 방식이 알고리즘의 절반을 설명한다. **MinHeap을 배열로 직접 구현할 수 있어야 통과.**
 
-스택, 큐, 힙은 "데이터를 어떤 순서로 꺼낼 것인가"를 결정하는 **세 가지 줄 서기 방식**이다.
+* * *
 
-- **스택 (LIFO)**: 마지막에 들어온 것이 먼저 나온다
-- **큐 (FIFO)**: 먼저 들어온 것이 먼저 나온다
-- **힙 (Priority)**: 우선순위가 가장 높은 것이 먼저 나온다
+## 0. 세 자료구조를 한 그림으로 — 초심자용
 
-이 세 가지로 알고리즘의 절반 이상이 구성된다. DFS는 스택, BFS는 큐, 다익스트라/A*는 힙.
+### 0-1. 공통점과 차이
 
-## § 1 · 스택 — 콜 스택의 바로 그것
+셋 다 "데이터를 하나씩 넣고 하나씩 꺼내는" 자료구조다. **어떤 순서로 꺼내느냐**가 다르다.
 
-스택은 한쪽 끝에서만 넣고 뺀다. 가장 익숙한 예는 **콜 스택**이다. 함수가 호출되면 프레임이 쌓이고, 리턴하면 가장 위가 빠진다.
+| 이름 | 꺼내는 규칙 | 일상 비유 |
+|---|---|---|
+| 스택(Stack) | 가장 **최근에 넣은 것**부터 | 책상 위 책 쌓기. 위에 올린 책부터 꺼냄 |
+| 큐(Queue) | 가장 **먼저 넣은 것**부터 | 줄 서기. 먼저 온 사람부터 서빙 |
+| 힙(Heap) | 가장 **우선순위 높은 것**부터 | 응급실 순서. 먼저 왔어도 중증 환자가 먼저 |
 
-<StackQueue />
+### 0-2. 두 줄 약어
 
-FE 실무에서의 대표 예:
+- **LIFO** (Last In, First Out) = 스택
+- **FIFO** (First In, First Out) = 큐
+- **힙**은 약어가 아니고 "우선순위 큐(Priority Queue)"라고도 불린다
 
-- **브라우저 히스토리** — 뒤로 가기는 스택 pop
-- **Undo/Redo** — 두 스택을 왔다갔다
-- **괄호 검증** — 여는 괄호를 push, 닫는 괄호에서 pop해 짝 맞추기
-- **DOM 순회의 DFS 구현** — 재귀 대신 명시적 스택
+### 0-3. 이게 왜 중요한가
+
+프론트 개발자가 매일 쓰는 것들이 사실 이 자료구조다 (안 보일 뿐).
+
+- **스택**: 브라우저 뒤로가기(`history`), 함수 호출의 Call Stack, undo 기능
+- **큐**: 이벤트 루프의 Task Queue ([2-6](2단계-6-이벤트-루프.md)), 작업 대기열
+- **힙**: 메모리 할당(Heap 메모리), 타이머 관리, 최상위 N개 뽑기
+
+### 0-4. 이 장의 도달점
+
+셋을 직접 코드로 구현할 수 있어야 한다. 특히 **힙**은 라이브러리 없이는 JS에 없어서, 코딩 테스트에서 거의 반드시 나온다.
+
+* * *
+
+## 1. 스택 (Stack, LIFO)
+
+### 1-1. 정의
+
+**후입선출** (Last In, First Out). 책상 위의 책 쌓기. 가장 나중에 올린 것이 가장 먼저 내려간다.
+
+### 1-2. JS로 스택
+
+배열의 `push`/`pop`이 둘 다 O(1)이므로 JS에선 배열이 곧 스택이다.
 
 ```js
-// 괄호 검증
-function isBalanced(s) {
+const stack = [];
+stack.push(1);     // [1]
+stack.push(2);     // [1, 2]
+stack.pop();       // 2, stack = [1]
+stack[stack.length - 1];  // peek: 1
+```
+
+### 1-3. 실전 1: 괄호 검증
+
+```js
+function isValidParens(s) {
   const pair = { ')': '(', ']': '[', '}': '{' };
   const stack = [];
   for (const ch of s) {
-    if ('([{'.includes(ch)) stack.push(ch);
-    else if (')]}'.includes(ch)) {
+    if (ch === '(' || ch === '[' || ch === '{') stack.push(ch);
+    else if (pair[ch]) {
       if (stack.pop() !== pair[ch]) return false;
     }
   }
   return stack.length === 0;
 }
+isValidParens("({[]})");   // true
+isValidParens("([)]");     // false
 ```
 
-JS 배열의 `push`/`pop`이 이미 스택이다. 별도 구조 없이 그냥 배열을 스택으로 쓴다.
+### 1-4. 실전 2: Undo/Redo
 
-## § 2 · 큐 — 이벤트 루프의 태스크 큐
-
-큐는 한쪽에서 넣고 **반대쪽**에서 뺀다. 들어온 순서 그대로 처리된다.
-
-FE 실무에서 가장 중요한 큐는 **이벤트 루프의 태스크 큐**다. `setTimeout`, DOM 이벤트, 네트워크 콜백은 모두 큐에 쌓였다가 순서대로 실행된다(2단계에서 심화).
-
-알고리즘에서는 **BFS(너비 우선 탐색)**의 기반이다.
+두 개의 스택으로 구현.
 
 ```js
-// BFS로 최단 거리
-function shortestPath(graph, start, target) {
-  const queue = [[start, 0]];
-  const visited = new Set([start]);
-  while (queue.length > 0) {
-    const [node, dist] = queue.shift();   // ← 여기가 O(n)!
-    if (node === target) return dist;
-    for (const next of graph[node]) {
+class History {
+  constructor() { this.undo = []; this.redo = []; }
+
+  execute(command) {
+    this.undo.push(command);
+    this.redo = [];   // 새 액션 후 redo 스택 비움
+  }
+
+  undoLast() {
+    const c = this.undo.pop();
+    if (c) this.redo.push(c);
+    return c;
+  }
+
+  redoLast() {
+    const c = this.redo.pop();
+    if (c) this.undo.push(c);
+    return c;
+  }
+}
+```
+
+### 1-5. 실전 3: 콜 스택
+
+JS 엔진 자체가 **함수 호출 스택**을 관리한다. 재귀가 깊어지면 `Maximum call stack size exceeded`가 뜨는 이유. Chrome V8에서 대략 **10000 ~ 15000** 프레임.
+
+### 1-6. 실전 4: 브라우저 히스토리
+
+`history.back()`은 **두 개의 스택** 구조. 현재 페이지 스택 + forward 스택.
+
+* * *
+
+## 2. 큐 (Queue, FIFO)
+
+### 2-1. 정의
+
+**선입선출** (First In, First Out). 대기줄. 먼저 온 사람이 먼저 나간다.
+
+### 2-2. ⚠️ JS 배열로 큐를 만들면 O(n)
+
+```js
+const queue = [];
+queue.push(1);
+queue.shift();   // O(n)! 뒤의 원소 전부 앞으로 밀림
+```
+
+수만 개 이상을 처리하면 `shift`가 병목이 된다.
+
+### 2-3. 해결책 1: 인덱스 큐
+
+`shift` 대신 **head 포인터**를 증가시킨다.
+
+```js
+class Queue {
+  constructor() { this.items = []; this.head = 0; }
+  enqueue(v) { this.items.push(v); }
+  dequeue() {
+    if (this.head >= this.items.length) return undefined;
+    const v = this.items[this.head++];
+    if (this.head > 50 && this.head * 2 > this.items.length) {
+      this.items = this.items.slice(this.head);
+      this.head = 0;
+    }
+    return v;
+  }
+  get size() { return this.items.length - this.head; }
+}
+```
+
+**주기적으로 배열을 압축**하지 않으면 메모리가 계속 커진다.
+
+### 2-4. 해결책 2: 연결 리스트
+
+앞/뒤 포인터를 유지하면 `enqueue`/`dequeue` 모두 O(1).
+
+### 2-5. 실전: BFS의 기본 자료구조
+
+```js
+function bfs(start, graph) {
+  const queue = new Queue();
+  const visited = new Set();
+  queue.enqueue(start);
+  visited.add(start);
+  while (queue.size > 0) {
+    const node = queue.dequeue();
+    for (const next of graph[node] ?? []) {
       if (!visited.has(next)) {
         visited.add(next);
-        queue.push([next, dist + 1]);
+        queue.enqueue(next);
       }
     }
   }
-  return -1;
 }
 ```
 
-> 위 코드의 `queue.shift()`는 **O(n)**이라 `n`이 커지면 전체가 O(n²)이 된다. 진지한 BFS에서는 `shift` 대신 **인덱스 포인터**를 쓰거나 **연결 리스트 기반 큐**를 쓴다.
+### 2-6. 실전: 이벤트 루프
+
+JS 런타임은 **태스크 큐**와 **마이크로태스크 큐**를 유지한다. `setTimeout`은 태스크 큐에, `Promise.then`은 마이크로태스크 큐에 들어간다. (2단계에서 심화)
+
+* * *
+
+## 3. 덱 (Deque, Double-Ended Queue)
+
+### 3-1. 정의
+
+양 끝에서 삽입/삭제 모두 O(1).
+
+### 3-2. 실전: 슬라이딩 윈도우 최댓값
+
+크기 k 윈도우 안의 최댓값을 매 위치마다 구한다. **덱에 인덱스를 저장**, 새 원소보다 작은 꼬리 원소들을 제거해 단조 감소 유지.
 
 ```js
-let head = 0;
-// push로 넣고
-queue.push(item);
-// shift 대신 인덱스만 올림
-const item = queue[head++];
-```
-
-## § 3 · 덱(Deque) — 양쪽에서 넣고 빼기
-
-덱(double-ended queue)은 양 끝에서 모두 O(1). 대표 응용은 **슬라이딩 윈도우 최댓값**이다.
-
-```js
-// 창 크기 k에서 각 창의 최댓값
-function maxInWindow(arr, k) {
-  const dq = [];        // 인덱스를 저장, arr 값은 단조 감소하도록 유지
+function slidingMax(arr, k) {
+  const deque = [];   // 인덱스 저장, 값은 arr[deque[0]]
   const result = [];
   for (let i = 0; i < arr.length; i++) {
-    // 왼쪽 밖으로 나간 인덱스 제거
-    if (dq.length && dq[0] <= i - k) dq.shift();
-    // 현재보다 작은 꼬리는 쓸모없으니 제거
-    while (dq.length && arr[dq[dq.length - 1]] <= arr[i]) dq.pop();
-    dq.push(i);
-    if (i >= k - 1) result.push(arr[dq[0]]);
+    // 1. 윈도우 벗어난 인덱스 제거
+    while (deque.length && deque[0] <= i - k) deque.shift();
+    // 2. 새로 온 값보다 작은 꼬리 제거
+    while (deque.length && arr[deque[deque.length - 1]] < arr[i]) deque.pop();
+    deque.push(i);
+    // 3. 윈도우 완성되면 답에 추가
+    if (i >= k - 1) result.push(arr[deque[0]]);
   }
   return result;
 }
+slidingMax([1, 3, -1, -3, 5, 3, 6, 7], 3);  // [3, 3, 5, 5, 6, 7]
 ```
 
-각 원소가 덱에 **한 번 들어오고 한 번 나가므로** 전체 O(n).
+각 원소는 **덱에 한 번 들어가고 한 번 나온다** → O(n).
 
-## § 4 · 힙과 우선순위 큐 (★ 직접 구현)
+* * *
 
-힙은 "다음에 꺼낼 것은 가장 작은/큰 것"을 보장한다. **이진 힙**은 배열로 구현하는 완전 이진 트리다.
+## 4. 힙 (Heap)과 우선순위 큐
 
-<div className="diagram-frame">
-  <svg viewBox="0 0 520 280" className="w-full h-auto" xmlns="http://www.w3.org/2000/svg">
-    {/* nodes */}
-    {[
-      { x: 260, y: 40,  val: 1, i: 0 },
-      { x: 160, y: 110, val: 3, i: 1 },
-      { x: 360, y: 110, val: 6, i: 2 },
-      { x: 90,  y: 180, val: 5, i: 3 },
-      { x: 210, y: 180, val: 9, i: 4 },
-      { x: 310, y: 180, val: 8, i: 5 },
-      { x: 410, y: 180, val: 7, i: 6 },
-    ].map((n, idx) => (
-      <g key={idx}>
-        <circle cx={n.x} cy={n.y} r={24} fill="#faf6eb" stroke="#1d1913" strokeWidth={1.4} />
-        <text x={n.x} y={n.y + 5} textAnchor="middle" fontFamily="var(--font-display)" fontStyle="italic" fontSize={18} fill="#8f2d20">{n.val}</text>
-        <text x={n.x} y={n.y - 32} textAnchor="middle" fontFamily="var(--font-hand)" fontSize={13} fill="#7a6e57">[{n.i}]</text>
-      </g>
-    ))}
-    {/* edges */}
-    <line x1="260" y1="60"  x2="160" y2="90"  stroke="#1d1913" strokeWidth={1.2} opacity={0.6} />
-    <line x1="260" y1="60"  x2="360" y2="90"  stroke="#1d1913" strokeWidth={1.2} opacity={0.6} />
-    <line x1="160" y1="130" x2="90"  y2="160" stroke="#1d1913" strokeWidth={1.2} opacity={0.6} />
-    <line x1="160" y1="130" x2="210" y2="160" stroke="#1d1913" strokeWidth={1.2} opacity={0.6} />
-    <line x1="360" y1="130" x2="310" y2="160" stroke="#1d1913" strokeWidth={1.2} opacity={0.6} />
-    <line x1="360" y1="130" x2="410" y2="160" stroke="#1d1913" strokeWidth={1.2} opacity={0.6} />
-    {/* array */}
-    <text x={30} y={250} fill="#7a6e57" fontFamily="var(--font-hand)" fontSize={16}>배열 저장:</text>
-    <text x={120} y={250} fill="#1d1913" fontFamily="var(--font-mono)" fontSize={14}>[1, 3, 6, 5, 9, 8, 7]</text>
-  </svg>
-  <figcaption className="diagram-caption">Min-heap — 부모 ≤ 자식, 완전 이진 트리라 배열로 담긴다</figcaption>
-</div>
+### 4-1. 정의
 
-배열 인덱스 규칙:
+**완전 이진 트리** + **힙 속성**.
+
+- 완전 이진 트리: 마지막 레벨 제외 전부 채워짐, 마지막 레벨은 왼쪽부터 채움
+- MinHeap: 부모 ≤ 자식 (루트가 최솟값)
+- MaxHeap: 부모 ≥ 자식 (루트가 최댓값)
+
+### 4-2. 배열 기반 표현
+
+완전 이진 트리는 **배열에 순서대로 담으면 낭비 없이** 표현된다.
+
+```
+        1         인덱스 0
+       / \
+      3   2       1, 2
+     / \ /
+    5  4 8        3, 4, 5
+```
+
+**부모-자식 관계 공식**:
 
 - 부모: `(i - 1) >> 1`
 - 왼쪽 자식: `2i + 1`
 - 오른쪽 자식: `2i + 2`
 
-**삽입**: 끝에 추가하고 **위로 올라가며** 부모와 비교(siftUp). **추출**: 루트를 꺼내고 마지막 요소를 루트에 놓은 뒤 **아래로 내려가며** 자식과 비교(siftDown). 둘 다 O(log n).
+### 4-3. MinHeap 구현
 
 ```js
 class MinHeap {
-  heap = [];
+  constructor() { this.heap = []; }
 
-  push(v) {
-    this.heap.push(v);
-    this.#siftUp(this.heap.length - 1);
+  push(val) {
+    this.heap.push(val);
+    this._bubbleUp(this.heap.length - 1);
   }
 
   pop() {
@@ -159,12 +254,15 @@ class MinHeap {
     const last = this.heap.pop();
     if (this.heap.length > 0) {
       this.heap[0] = last;
-      this.#siftDown(0);
+      this._sinkDown(0);
     }
     return top;
   }
 
-  #siftUp(i) {
+  peek() { return this.heap[0]; }
+  get size() { return this.heap.length; }
+
+  _bubbleUp(i) {
     while (i > 0) {
       const parent = (i - 1) >> 1;
       if (this.heap[parent] <= this.heap[i]) break;
@@ -173,7 +271,7 @@ class MinHeap {
     }
   }
 
-  #siftDown(i) {
+  _sinkDown(i) {
     const n = this.heap.length;
     while (true) {
       const l = 2 * i + 1, r = 2 * i + 2;
@@ -181,24 +279,177 @@ class MinHeap {
       if (l < n && this.heap[l] < this.heap[smallest]) smallest = l;
       if (r < n && this.heap[r] < this.heap[smallest]) smallest = r;
       if (smallest === i) break;
-      [this.heap[smallest], this.heap[i]] = [this.heap[i], this.heap[smallest]];
+      [this.heap[i], this.heap[smallest]] = [this.heap[smallest], this.heap[i]];
       i = smallest;
     }
   }
 }
 ```
 
-**대표 응용**:
+### 4-4. 동작 시각화
 
-- **Top-K** — 작은 원소 K개만 유지하며 나머지는 버림
-- **다익스트라 최단 경로** — 다음에 볼 노드를 "가장 가까운 노드"로 뽑기
-- **이벤트 스케줄러** — "다음에 실행될 이벤트" 우선순위
+```
+push(5):  [5]
+push(3):  [3, 5]          ← 3이 5보다 작아 위로
+push(8):  [3, 5, 8]
+push(1):  [1, 3, 8, 5]    ← 1이 5와 스왑, 다시 3과 스왑
+push(6):  [1, 3, 8, 5, 6]
 
-## § 5 · 체크포인트
+pop():    1 반환
+  마지막 6을 루트로: [6, 3, 8, 5]
+  6 > 3이므로 3과 스왑: [3, 6, 8, 5]
+  6 > 5이므로 스왑: [3, 5, 8, 6]
+  ← 최종
+```
 
-- [ ] 스택과 큐의 차이를 "콜 스택 vs 이벤트 루프 태스크 큐"로 설명할 수 있다
-- [ ] `queue.shift()`가 왜 숨은 O(n) 함정인지 안다
-- [ ] 덱의 양쪽 O(1)이 슬라이딩 윈도우 최댓값 문제를 어떻게 푸는지 이해한다
-- [ ] 이진 힙을 배열로 구현할 때 부모·자식 인덱스 공식을 외우고 있다
-- [ ] siftUp / siftDown의 비교 방향과 멈추는 조건을 설명할 수 있다
-- [ ] 다익스트라가 왜 힙을 써야 하는지(정렬된 순서로 다음 노드를 꺼내야 하므로)를 안다
+### 4-5. 복잡도
+
+| 연산 | 복잡도 |
+|---|---|
+| `push` | O(log n) |
+| `pop` | O(log n) |
+| `peek` | O(1) |
+| `heapify` (배열 → 힙) | O(n) |
+
+**`heapify`가 O(n)인 이유**: 리프 노드부터 거꾸로 sinkDown을 실행하면, 위로 갈수록 노드 수가 절반씩 줄어든다. 수학적으로 `n × (1/2 × 1 + 1/4 × 2 + ...) ≈ 2n`.
+
+### 4-6. 실전: Top-K
+
+상위 K개를 구할 때 전체 정렬(O(n log n))보다 **크기 K인 MinHeap 유지**가 빠르다.
+
+```js
+function topK(arr, k) {
+  const heap = new MinHeap();
+  for (const v of arr) {
+    heap.push(v);
+    if (heap.size > k) heap.pop();
+  }
+  return [...heap.heap].sort((a, b) => b - a);
+}
+```
+
+복잡도: O(n log k). n=10⁶, k=10이면 대략 2 × 10⁷. 전체 정렬은 2 × 10⁷. 비슷하지만 **메모리를 O(k)만 쓴다**는 장점이 크다.
+
+### 4-7. 실전: 다익스트라 / A*
+
+최단 경로 알고리즘의 핵심. **"지금까지 가장 거리 짧은 노드"를 꺼내는 연산**을 O(log V)에 수행. (1-7 챕터에서 심화)
+
+### 4-8. 실전: 이벤트 스케줄러
+
+브라우저 `setTimeout`은 **timer queue**를 유지하는데, 만료 시각 기준 MinHeap을 쓰는 엔진이 많다 (Node.js libuv 포함). 매 틱마다 "가장 먼저 만료될 타이머"를 O(log n)에 꺼낼 수 있기 때문.
+
+* * *
+
+## 5. JS에 내장된 힙이 없다
+
+Java의 `PriorityQueue`, Python의 `heapq`에 해당하는 내장이 JS엔 **없다**. 항상 직접 구현하거나 라이브러리를 써야 한다 (`@js-sdsl/priority-queue`, `heap-js`).
+
+면접과 코테에서는 **배울 내용 중 하나**로 간주된다. 위 클래스는 외워두는 것이 좋다.
+
+* * *
+
+## 연습 문제
+
+1. 스택으로 `"3 + 4 * 2"` (중위식)을 `"3 4 2 * +"` (후위식)으로 변환하라.
+2. JS 배열로 큐를 만들면 왜 O(n)인지, head 포인터 버전이 왜 O(1)인지 설명하라.
+3. 덱을 써서 크기 K 슬라이딩 윈도우의 최솟값을 O(n)에 구하라.
+4. MinHeap을 직접 구현하고, `[7, 2, 5, 1, 8, 3]`을 push 순서대로 넣었을 때 pop 4번의 결과와 배열 상태를 추적하라.
+5. Top-K 문제를 MinHeap 버전과 정렬 버전 양쪽으로 구현하고 복잡도를 비교하라.
+6. 다익스트라에서 왜 MaxHeap이 아닌 MinHeap을 쓰는지 설명하라.
+
+* * *
+
+## 연습 문제 정답
+
+### 1. 중위 → 후위
+
+```js
+function infixToPostfix(expr) {
+  const precedence = { '+': 1, '-': 1, '*': 2, '/': 2 };
+  const output = [];
+  const ops = [];
+  for (const token of expr.split(/\s+/)) {
+    if (/\d+/.test(token)) output.push(token);
+    else {
+      while (ops.length && precedence[ops[ops.length - 1]] >= precedence[token]) {
+        output.push(ops.pop());
+      }
+      ops.push(token);
+    }
+  }
+  while (ops.length) output.push(ops.pop());
+  return output.join(' ');
+}
+infixToPostfix("3 + 4 * 2");  // "3 4 2 * +"
+```
+
+### 2. 큐 O(n) → O(1)
+
+`Array.shift`는 모든 뒤 원소를 한 칸씩 앞으로 이동시켜 O(n). **head 포인터 방식**은 인덱스만 증가시키므로 O(1). 대신 주기적으로 배열을 압축해야 메모리 누수가 없다.
+
+### 3. 슬라이딩 윈도우 최솟값
+
+```js
+function slidingMin(arr, k) {
+  const deque = [];
+  const result = [];
+  for (let i = 0; i < arr.length; i++) {
+    while (deque.length && deque[0] <= i - k) deque.shift();
+    while (deque.length && arr[deque[deque.length - 1]] > arr[i]) deque.pop();
+    deque.push(i);
+    if (i >= k - 1) result.push(arr[deque[0]]);
+  }
+  return result;
+}
+```
+
+단조 감소 대신 **단조 증가**를 유지하면 된다.
+
+### 4. MinHeap 추적
+
+```
+push(7): [7]
+push(2): [2, 7]
+push(5): [2, 7, 5]
+push(1): [1, 2, 5, 7]
+push(8): [1, 2, 5, 7, 8]
+push(3): [1, 2, 3, 7, 8, 5]
+
+pop(): 1 → [2, 7, 3, 5, 8] (5를 루트에 놓고 내려보냄)
+pop(): 2 → [3, 5, 8, 7]
+pop(): 3 → [5, 7, 8]
+pop(): 5 → [7, 8]
+```
+
+### 5. Top-K
+
+- MinHeap 버전: O(n log k), 메모리 O(k)
+- 정렬 버전: O(n log n), 메모리 O(n)
+
+k가 n보다 훨씬 작을 때 MinHeap이 유리하다.
+
+### 6. 다익스트라에서 MinHeap
+
+매 단계마다 "**지금까지 발견된 최단 거리**가 가장 작은 노드"를 확장해야 한다. 최솟값 추출이 반복되므로 MinHeap.
+
+MaxHeap은 "가장 큰 것부터" — 다익스트라의 요구와 반대다.
+
+* * *
+
+## 체크리스트
+
+- [ ] 스택의 LIFO 특성과 FE 활용 예시 3개 이상을 안다
+- [ ] JS 배열의 `push/pop`이 O(1)인 이유를 안다
+- [ ] `Array.shift`가 O(n)인 이유를 메모리 배치로 설명할 수 있다
+- [ ] 큐를 O(1)로 구현하는 2가지 방법을 안다 (head 포인터, 연결 리스트)
+- [ ] 덱의 용도와 슬라이딩 윈도우 최댓값 문제를 안다
+- [ ] 힙의 배열 기반 부모/자식 인덱스 공식을 안다
+- [ ] MinHeap을 배열로 직접 구현할 수 있다
+- [ ] `push`/`pop`의 복잡도가 왜 O(log n)인지 설명할 수 있다
+- [ ] `heapify`가 O(n)인 이유를 안다
+- [ ] Top-K 문제에서 MinHeap이 정렬보다 유리한 조건을 안다
+- [ ] 다익스트라/A*가 우선순위 큐를 쓰는 이유를 안다
+
+* * *
+
+**이전**: [1-4. 배열·문자열·해시](1단계-4-배열-문자열-해시) | **다음**: [1-6. 연결 리스트·트리·그래프](1단계-6-연결-리스트-트리-그래프)

@@ -1,47 +1,160 @@
-## 왜 이 장인가
 
-앞 장들이 **자료구조**였다면, 이 장은 그 위에서 동작하는 **알고리즘 패턴**이다. 실전에서 맞닥뜨리는 문제는 대부분 아래 8가지 패턴 중 하나로 환원된다.
+> **정렬, 이분 탐색, DP, 그리디, 위상 정렬, 최단 경로**. 코테에서 실전 문제로 나오는 알고리즘들을 한 번에 정리한다.
 
-정렬 · 이분 탐색 · 분할 정복 · DP · 백트래킹 · 그리디 · 위상 정렬 · 최단 경로.
+* * *
 
-이 패턴들의 **판별법**을 익히는 것이 이 장의 목표다. "이 문제는 DP일까 그리디일까"를 감으로 구분할 수 있으면 문제의 반은 푼 셈이다.
+## 0. "알고리즘"이란 정확히 뭔가 — 초심자용
 
-## § 1 · 정렬 — 셋만 기억하면 된다
+### 0-1. 한 줄 정의
 
-### 개념 수준만 알고 있으면 되는 것
+**주어진 문제를 풀기 위한 "단계의 목록"**. 케이크 레시피, IKEA 조립 설명서, 길 찾기 방법 — 전부 알고리즘이다. 컴퓨터 과학에서의 알고리즘은 **유한한 단계로 끝나고, 각 단계가 명확해서 기계가 따라 할 수 있는** 레시피를 의미한다.
 
-| 알고리즘 | 복잡도 | 메모 |
+### 0-2. 자료구조와의 관계
+
+- **자료구조** (1-4~1-6): 데이터를 **어떻게 담을지**
+- **알고리즘** (1-7): 담긴 데이터로 **어떻게 문제를 풀지**
+
+둘은 짝이다. 좋은 자료구조 선택이 알고리즘을 단순화한다. 예: 빈번한 조회가 필요하면 배열 + 선형 탐색(O(n)) 대신 해시(O(1))를 쓰는 순간, 알고리즘 전체가 달라진다.
+
+### 0-3. 이 장의 6가지 전략
+
+| 알고리즘 | 한 줄 핵심 | 대표 예시 |
 |---|---|---|
-| 버블 | O(n²) | 교육용 |
-| 선택 | O(n²) | 비교는 많지만 swap은 적음 |
-| 삽입 | O(n²) 최악 / **O(n) 거의 정렬됨** | Timsort의 부품 |
+| 정렬 | 순서대로 재배치 | 검색/비교 전처리 |
+| 이분 탐색 | 정렬된 데이터를 반씩 좁혀 찾기 | 로그인 중복 확인 |
+| DP (동적 계획법) | 작은 문제의 답을 저장해 큰 문제 풀이 | 최장 공통 부분 문자열 |
+| 그리디 | 매 순간 최선의 선택 | 거스름돈 |
+| 위상 정렬 | 선후관계 그래프를 순서화 | 패키지 설치 순서 |
+| 최단 경로 | 그래프에서 최소 비용 경로 | 지도 길 찾기 |
 
-### 실전에서 중요한 것
+### 0-4. 실무에서의 의미
 
-**퀵 정렬** — 평균 O(n log n), 최악 O(n²). **in-place**(추가 공간 O(1)). 랜덤 피벗이면 사실상 항상 O(n log n).
+"알고리즘 문제" = 코딩 테스트용이라고 흔히 오해한다. 사실 매일 쓴다.
 
-**머지 정렬** — 항상 O(n log n) 보장. **stable**(같은 값의 상대 순서 유지). 추가 공간 O(n).
+- **정렬**: 테이블 컴포넌트의 정렬 기능, 검색 결과 순위
+- **이분 탐색**: React의 효율적 key 매칭, 라우터 경로 매칭
+- **DP**: 메모이제이션 (`useMemo`가 본질적으로 같은 아이디어)
+- **그래프 탐색**: 번들러가 의존성 전체 순회, 컴포넌트 트리 렌더링
+- **위상 정렬**: Webpack/Vite의 모듈 빌드 순서 결정
 
-**힙 정렬** — 항상 O(n log n), in-place, 하지만 **unstable**.
+**자료구조를 "그릇"이라고 한다면, 알고리즘은 "그릇을 들고 움직이는 동선"이다.**
 
-### JS `Array.sort()`가 실제로 쓰는 것
+* * *
 
-**Timsort** — 머지 + 삽입의 하이브리드. "거의 정렬된 구간(run)"을 먼저 찾아내 그 안에서는 삽입 정렬(빠름), 큰 단위에서는 머지(안정적). **stable**이며, ES2019부터 모든 엔진에서 stable 보장.
+## 1. 정렬
+
+### 1-1. 비교 정렬의 하한
+
+비교 기반 정렬의 이론적 하한은 **Ω(n log n)**. 비둘기집 원리로 증명 가능 (n!개의 순열 구분에 log(n!) ≈ n log n 비트 정보 필요).
+
+### 1-2. 버블/선택/삽입 정렬 — 개념만
 
 ```js
-// 객체 정렬에서 stable이 왜 중요한가?
-const items = [
-  { name: 'A', priority: 2 },
-  { name: 'B', priority: 1 },
-  { name: 'C', priority: 2 }, // A와 같은 priority
-];
-items.sort((a, b) => a.priority - b.priority);
-// stable이면 A, C의 상대 순서가 보장된다 — 중요한 UX
+// 삽입 정렬 - 작은 n(< 20)에서 빠름
+function insertionSort(arr) {
+  for (let i = 1; i < arr.length; i++) {
+    const cur = arr[i];
+    let j = i - 1;
+    while (j >= 0 && arr[j] > cur) { arr[j + 1] = arr[j]; j--; }
+    arr[j + 1] = cur;
+  }
+  return arr;
+}
 ```
 
-## § 2 · 이분 탐색
+- 평균·최악 O(n²)
+- **작은 배열 또는 거의 정렬된 배열에선 O(n)에 가까움** → Timsort에서 내부적으로 사용
 
-**정렬된** 배열에서 `O(log n)`. 창을 절반씩 자른다.
+### 1-3. 퀵 정렬
+
+**분할 정복 + 파티션**. 피벗 기준으로 작은 값은 왼쪽, 큰 값은 오른쪽으로 재배치.
+
+```js
+function quickSort(arr, lo = 0, hi = arr.length - 1) {
+  if (lo >= hi) return arr;
+  const pivot = partition(arr, lo, hi);
+  quickSort(arr, lo, pivot - 1);
+  quickSort(arr, pivot + 1, hi);
+  return arr;
+}
+
+function partition(arr, lo, hi) {
+  const pivot = arr[hi];
+  let i = lo;
+  for (let j = lo; j < hi; j++) {
+    if (arr[j] <= pivot) {
+      [arr[i], arr[j]] = [arr[j], arr[i]];
+      i++;
+    }
+  }
+  [arr[i], arr[hi]] = [arr[hi], arr[i]];
+  return i;
+}
+```
+
+- 평균 O(n log n), **최악 O(n²)** (이미 정렬된 데이터 + 나쁜 피벗)
+- **in-place**, 캐시 친화적 → 현실에서 가장 빠른 정렬 중 하나
+- 피벗을 랜덤으로 고르면 최악 확률이 극단적으로 낮아짐
+
+### 1-4. 머지 정렬
+
+**분할 정복 + 병합**. 반으로 나누고 각각 정렬한 뒤 합친다.
+
+```js
+function mergeSort(arr) {
+  if (arr.length <= 1) return arr;
+  const mid = Math.floor(arr.length / 2);
+  const left = mergeSort(arr.slice(0, mid));
+  const right = mergeSort(arr.slice(mid));
+  return merge(left, right);
+}
+
+function merge(a, b) {
+  const result = [];
+  let i = 0, j = 0;
+  while (i < a.length && j < b.length) {
+    if (a[i] <= b[j]) result.push(a[i++]);
+    else result.push(b[j++]);
+  }
+  while (i < a.length) result.push(a[i++]);
+  while (j < b.length) result.push(b[j++]);
+  return result;
+}
+```
+
+- **O(n log n) 보장** (최악도 동일)
+- **안정 정렬** (같은 값의 원래 순서 유지)
+- 추가 공간 O(n) 필요
+
+### 1-5. Timsort
+
+**JS `Array.sort()`의 내부.** 머지 정렬 + 삽입 정렬 하이브리드.
+
+1. 배열을 "run"(이미 정렬된 연속 구간)으로 나눔
+2. 짧은 run은 삽입 정렬로 정리
+3. run들을 머지 정렬처럼 병합
+
+실전 데이터는 부분적으로 정렬된 경우가 많아 매우 빠르다. **안정 정렬**.
+
+### 1-6. 정렬 알고리즘 비교
+
+| | 평균 | 최악 | 공간 | 안정성 |
+|---|---|---|---|---|
+| 버블 | O(n²) | O(n²) | O(1) | O |
+| 삽입 | O(n²) | O(n²) | O(1) | O |
+| 선택 | O(n²) | O(n²) | O(1) | X |
+| 퀵 | O(n log n) | O(n²) | O(log n) | X |
+| 머지 | O(n log n) | O(n log n) | O(n) | O |
+| 힙 | O(n log n) | O(n log n) | O(1) | X |
+| **Timsort** | **O(n log n)** | **O(n log n)** | **O(n)** | **O** |
+
+* * *
+
+## 2. 이분 탐색
+
+### 2-1. 기본
+
+**정렬된 배열**에서 O(log n).
 
 ```js
 function binarySearch(arr, target) {
@@ -50,15 +163,20 @@ function binarySearch(arr, target) {
     const mid = (lo + hi) >> 1;
     if (arr[mid] === target) return mid;
     if (arr[mid] < target) lo = mid + 1;
-    else                   hi = mid - 1;
+    else hi = mid - 1;
   }
   return -1;
 }
 ```
 
-### `lower_bound` — 삽입 위치 찾기
+### 2-2. ⚠️ 함정: `(lo + hi) / 2`의 오버플로
 
-"이 값을 넣어도 정렬이 깨지지 않는 가장 왼쪽 위치".
+정수 오버플로를 막으려면 `lo + Math.floor((hi - lo) / 2)`. JS는 53비트 정밀도라 배열 크기 한계보다 훨씬 크므로 실질적 위험 없음. 하지만 C/Java 이식 시 주의.
+
+### 2-3. lower_bound / upper_bound
+
+- **lower_bound**: target 이상인 **첫 위치**
+- **upper_bound**: target 초과인 **첫 위치**
 
 ```js
 function lowerBound(arr, target) {
@@ -66,215 +184,454 @@ function lowerBound(arr, target) {
   while (lo < hi) {
     const mid = (lo + hi) >> 1;
     if (arr[mid] < target) lo = mid + 1;
-    else                   hi = mid;
+    else hi = mid;
   }
   return lo;
 }
 ```
 
-### 파라메트릭 서치 — 답을 이분 탐색
+### 2-4. 파라메트릭 서치
 
-"최댓값을 구하라" 유형에서, 답의 범위가 정해져 있고 "이 값이 조건을 만족하는가?"를 판정할 수 있으면 **답 자체를 이분 탐색**한다.
+**"답"을 이분 탐색한다**. "조건을 만족하는 최소/최대 값을 구하라" 유형.
+
+예: **"요리 시간 T초에 모든 n인분을 만들 수 있는 최소 T?"** — T를 이분 탐색.
 
 ```js
-// 길이 n의 로프를 k개의 자식에게 같게 나눠줄 수 있는 최대 길이?
-// 답의 범위 [1, max(ropes)]에서 "길이 L이 가능한가?"를 이분 탐색
+function parametric(lo, hi, canSatisfy) {
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (canSatisfy(mid)) hi = mid;
+    else lo = mid + 1;
+  }
+  return lo;
+}
 ```
 
-## § 3 · 재귀와 반복 — 경계 조건
+* * *
 
-재귀는 우아하지만 함정이 있다.
+## 3. 재귀와 반복
 
-- **JS의 재귀 깊이 제한** — 스택 오버플로우 전까지 약 1만 프레임. 깊은 DFS는 재귀 대신 **명시적 스택** 사용.
-- **꼬리 재귀 최적화(TCO)** — ES6 스펙에는 있지만 V8 등 대부분의 엔진이 **구현 안 함**. JS에서는 기대하지 말 것.
-- **중복 호출** — 메모이제이션 없이 재귀 피보나치를 짜면 `O(2ⁿ)`으로 폭발한다.
+### 3-1. 재귀의 비용
 
-## § 4 · 백트래킹 — 가지치기가 전부
+- 콜 스택 공간: O(깊이)
+- 함수 호출 오버헤드
+- 꼬리 재귀 최적화를 **JS 엔진은 거의 지원 안 한다** (ES6 스펙엔 있지만)
 
-"모든 경우를 시도하되, **틀린 가지는 조기에 버린다**".
+### 3-2. 재귀 → 반복 변환
+
+깊은 재귀는 `Maximum call stack size exceeded`가 난다. 같은 로직을 명시적 스택으로 바꿀 수 있다.
 
 ```js
-// N-Queens — n × n 판에 n개 퀸을 서로 공격하지 않게 놓기
-function nQueens(n) {
+// 재귀
+function sumList(node) {
+  if (!node) return 0;
+  return node.val + sumList(node.next);
+}
+
+// 반복
+function sumListIter(node) {
+  let sum = 0;
+  while (node) { sum += node.val; node = node.next; }
+  return sum;
+}
+```
+
+* * *
+
+## 4. 백트래킹
+
+### 4-1. 구조
+
+```
+for 선택지:
+  선택
+  재귀 호출
+  선택 취소
+```
+
+**가지치기 (pruning)**가 성능의 핵심.
+
+### 4-2. N-Queens
+
+N×N 체스판에 N개의 퀸을 서로 공격 못 하게 놓기.
+
+```js
+function solveNQueens(n) {
+  const result = [];
   const cols = new Set(), diag1 = new Set(), diag2 = new Set();
-  let count = 0;
+  const board = new Array(n);
+
   function backtrack(row) {
-    if (row === n) { count++; return; }
+    if (row === n) { result.push([...board]); return; }
     for (let col = 0; col < n; col++) {
       if (cols.has(col) || diag1.has(row - col) || diag2.has(row + col)) continue;
       cols.add(col); diag1.add(row - col); diag2.add(row + col);
+      board[row] = col;
       backtrack(row + 1);
       cols.delete(col); diag1.delete(row - col); diag2.delete(row + col);
     }
   }
+
   backtrack(0);
-  return count;
+  return result;
 }
 ```
 
-핵심은 **"이 선택이 불가능하면 즉시 되돌아간다"**는 pruning. 가지치기가 없으면 단순 완전 탐색과 같다.
+핵심은 **"이미 쓴 열/대각선"을 Set으로 O(1)에 체크**하는 가지치기.
 
-## § 5 · 분할 정복
+### 4-3. 순열/조합
 
-"큰 문제를 같은 형태의 작은 문제 여러 개로 쪼갠 뒤, 해결한 것을 합친다". 머지 정렬·퀵 정렬이 정확히 이 패턴.
+1-2 챕터에서 다룬 내용. 백트래킹의 가장 기본적인 형태.
 
-점화식이 `T(n) = a·T(n/b) + f(n)` 꼴이면 **마스터 정리**로 복잡도를 바로 구할 수 있다.
+* * *
 
-## § 6 · 동적 계획법 (DP) — 겹치는 부분 문제
+## 5. 동적 계획법 (DP)
 
-DP의 두 조건:
+### 5-1. 성립 조건
 
-1. **최적 부분 구조**: 큰 문제의 최적해가 작은 부분 문제의 최적해로부터 만들어진다
-2. **중복되는 부분 문제**: 같은 부분 문제가 여러 번 나타난다
+1. **최적 부분 구조 (Optimal Substructure)**: 문제의 최적해가 부분 문제의 최적해로 구성됨
+2. **중복 부분 문제 (Overlapping Subproblems)**: 같은 부분 문제가 여러 번 계산됨
 
-### Top-down (메모이제이션)
+### 5-2. 두 가지 접근
+
+**Top-down (메모이제이션)**: 재귀 + 캐시.
 
 ```js
-function fib(n, memo = {}) {
+function fibMemo(n, cache = new Map()) {
   if (n < 2) return n;
-  if (memo[n] !== undefined) return memo[n];
-  return memo[n] = fib(n - 1, memo) + fib(n - 2, memo);
+  if (cache.has(n)) return cache.get(n);
+  const result = fibMemo(n - 1, cache) + fibMemo(n - 2, cache);
+  cache.set(n, result);
+  return result;
 }
 ```
 
-### Bottom-up (타뷸레이션)
+**Bottom-up (타뷸레이션)**: 반복 + 배열.
 
 ```js
-function fib(n) {
+function fibTab(n) {
   if (n < 2) return n;
   const dp = [0, 1];
-  for (let i = 2; i <= n; i++) dp[i] = dp[i - 1] + dp[i - 2];
+  for (let i = 2; i <= n; i++) dp[i] = dp[i-1] + dp[i-2];
   return dp[n];
 }
-```
-
-현실적으론 공간을 더 줄여 **이전 두 값만 유지**하면 O(1) 공간에 해결된다.
-
-### 대표 유형
-
-- **LIS** (Longest Increasing Subsequence) — 가장 긴 증가 부분수열
-- **LCS** (Longest Common Subsequence) — 두 수열의 가장 긴 공통 부분수열
-- **배낭 문제** — 무게 제한 하에서 가치 최대화
-- **동전 교환** — 최소 동전 수
-- **편집 거리** — 아래 § 10 참고
-
-## § 7 · 그리디 — 증명이 없으면 틀린다
-
-매 단계에서 "지금 시점에서 가장 좋은 선택"을 한다. 빠르지만 **정당성 증명**이 필수다.
-
-고전 예: 동전 교환.
-
-```
-동전: [1, 5, 10, 50, 100, 500]
-거스름돈 760원을 최소 동전 수로 만들려면?
-→ 그리디(큰 동전부터): 500 + 100 + 100 + 50 + 10 = 5개 ✓
-```
-
-하지만 동전이 `[1, 4, 5]`이고 8원을 만든다면:
-
-```
-그리디: 5 + 1 + 1 + 1 = 4개
-최적  : 4 + 4          = 2개  ← 그리디가 틀림
-```
-
-**교환 논증**으로 그리디의 옳음을 증명할 수 있어야 한다. 증명이 안 되면 DP를 써야 한다.
-
-## § 8 · 위상 정렬 — 번들러가 쓰는 바로 그것
-
-**DAG**(방향 있는 비순환 그래프)에서 "어떤 순서로 처리하면 선후 관계가 지켜지는가"를 정한다. 모듈 의존성 해결의 기반.
-
-### Kahn의 알고리즘 — 진입 차수 기반
-
-```js
-function topoSort(graph) {
-  const inDegree = {};
-  for (const node in graph) inDegree[node] ??= 0;
-  for (const node in graph) {
-    for (const next of graph[node]) inDegree[next] = (inDegree[next] ?? 0) + 1;
-  }
-
-  const queue = Object.keys(inDegree).filter(n => inDegree[n] === 0);
-  const result = [];
-  while (queue.length) {
-    const node = queue.shift();
-    result.push(node);
-    for (const next of graph[node] ?? []) {
-      inDegree[next]--;
-      if (inDegree[next] === 0) queue.push(next);
-    }
-  }
-
-  return result.length === Object.keys(inDegree).length ? result : null; // null = 순환
+// 공간 최적화 O(1)
+function fibO1(n) {
+  let a = 0, b = 1;
+  for (let i = 0; i < n; i++) [a, b] = [b, a + b];
+  return a;
 }
 ```
 
-번들러는 위상 정렬로 **"누가 먼저 로드되어야 하는가"**를 결정한다. `import` 순환(circular dependency)은 위상 정렬이 실패할 때 튀어나오는 에러다.
+### 5-3. 대표 문제: LIS (Longest Increasing Subsequence)
 
-## § 9 · 최단 경로
-
-| 알고리즘 | 조건 | 복잡도 |
-|---|---|---|
-| **BFS** | 가중치 없음 | O(V + E) |
-| **다익스트라** | 가중치 ≥ 0 | O((V + E) log V) with heap |
-| **벨만-포드** | 음수 가중치 허용 | O(V · E) |
-| **플로이드-워셜** | 모든 쌍 | O(V³) |
-
-다익스트라는 사실상 "**가중치 있는 BFS**"다. 큐 대신 우선순위 큐(힙)를 쓰고, "지금까지 가장 가까운 노드"를 매 단계 꺼낸다. FE에서 라우팅·경로 계산을 직접 구현할 일은 드물지만, **네트워크 라우팅**이 이 알고리즘 위에 돌아간다.
-
-## § 10 · 편집 거리 — DP의 왕
-
-두 문자열을 같게 만드는 **최소 삽입/삭제/교체 연산 수**. diff, 검색 유사도, 오타 제안의 기반.
-
+```js
+function lis(arr) {
+  const n = arr.length;
+  const dp = new Array(n).fill(1);
+  for (let i = 1; i < n; i++) {
+    for (let j = 0; j < i; j++) {
+      if (arr[j] < arr[i]) dp[i] = Math.max(dp[i], dp[j] + 1);
+    }
+  }
+  return Math.max(...dp);
+}
+lis([3, 1, 4, 1, 5, 9, 2, 6]);  // 4 ([1, 4, 5, 9] 또는 [1, 4, 5, 6])
 ```
-       ""  k   i   t   t   e   n
-   ""   0  1   2   3   4   5   6
-   s    1  1   2   3   4   5   6
-   i    2  2   1   2   3   4   5
-   t    3  3   2   1   2   3   4
-   t    4  4   3   2   1   2   3
-   i    5  5   4   3   2   2   3
-   n    6  6   5   4   3   3   2
-   g    7  7   6   5   4   4   3   ← 답: 3
-```
+
+- O(n²) DP. 이분 탐색을 곁들이면 O(n log n)으로도 된다.
+
+### 5-4. 편집 거리 (Levenshtein)
+
+두 문자열을 같게 만드는 최소 편집(삽입/삭제/치환) 수.
 
 ```js
 function editDistance(a, b) {
   const m = a.length, n = b.length;
-  const dp = Array.from({ length: m + 1 }, () => Array(n + 1).fill(0));
+  const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
   for (let i = 0; i <= m; i++) dp[i][0] = i;
   for (let j = 0; j <= n; j++) dp[0][j] = j;
   for (let i = 1; i <= m; i++) {
     for (let j = 1; j <= n; j++) {
-      if (a[i - 1] === b[j - 1]) dp[i][j] = dp[i - 1][j - 1];
-      else dp[i][j] = 1 + Math.min(dp[i - 1][j], dp[i][j - 1], dp[i - 1][j - 1]);
+      if (a[i-1] === b[j-1]) dp[i][j] = dp[i-1][j-1];
+      else dp[i][j] = 1 + Math.min(dp[i-1][j], dp[i][j-1], dp[i-1][j-1]);
     }
   }
   return dp[m][n];
 }
+editDistance("kitten", "sitting");  // 3
 ```
 
-**Virtual DOM diff가 왜 이 문제의 단순화 버전인가**: 두 트리의 "최소 편집 연산"을 구하는 것이 원래 문제이나, 풀면 O(n³) 이상이라 React는 발견적 알고리즘(heuristic)으로 **같은 레벨의 같은 타입 노드만 비교**하는 방식으로 O(n)으로 낮춘다.
+### 5-5. 배낭 문제 (Knapsack)
 
-## § 11 · 패턴 판별 — 이 문제는 어떤 패턴인가?
+"용량 W 가방에 최대 가치로 아이템 담기". 0/1 배낭은 각 아이템을 한 번만 사용.
 
-| 문제가 이렇게 생겼으면 | 패턴 |
-|---|---|
-| "정렬된 배열에서 x를 찾아라" | 이분 탐색 |
-| "모든 경우의 수를 구하라" / "가능한 조합을 전부" | 백트래킹 |
-| "최소/최대 ~을 구하라" + 부분 문제 중복 | DP |
-| "최소/최대 ~을 구하라" + 탐욕이 증명 가능 | 그리디 |
-| "선후 관계가 있는 작업들의 순서" | 위상 정렬 |
-| "가중치 0인 최단 거리" | BFS |
-| "가중치 양수인 최단 거리" | 다익스트라 |
-| "두 문자열의 유사도" | 편집 거리 (DP) |
+```js
+function knapsack(weights, values, W) {
+  const n = weights.length;
+  const dp = Array.from({ length: n + 1 }, () => new Array(W + 1).fill(0));
+  for (let i = 1; i <= n; i++) {
+    for (let w = 0; w <= W; w++) {
+      dp[i][w] = dp[i-1][w];
+      if (weights[i-1] <= w) {
+        dp[i][w] = Math.max(dp[i][w], dp[i-1][w - weights[i-1]] + values[i-1]);
+      }
+    }
+  }
+  return dp[n][W];
+}
+```
 
-## § 12 · 체크포인트
+* * *
 
-- [ ] Timsort가 왜 stable인 것이 실무에서 의미가 있는지 설명할 수 있다
-- [ ] 이분 탐색에서 `lo <= hi` vs `lo < hi`의 경계 조건을 구분할 수 있다
-- [ ] 백트래킹이 완전 탐색과 어떻게 다른지 (가지치기) 설명할 수 있다
-- [ ] DP의 두 조건(최적 부분 구조, 중복 부분 문제)을 외우고 있다
-- [ ] 그리디가 정당성 증명 없이는 믿을 수 없는 이유를 **반례**로 보일 수 있다
-- [ ] Kahn 알고리즘의 진입 차수 갱신 순서를 설명할 수 있다
-- [ ] 다익스트라가 왜 우선순위 큐를 쓰는지(가장 가까운 노드부터 확정) 안다
-- [ ] 편집 거리 DP 테이블의 점화식을 칠판에 그릴 수 있다
+## 6. 그리디
+
+### 6-1. 정의
+
+**"각 단계에서 지역 최적을 고른다"**. 그 선택이 전체 최적으로 이어짐을 증명할 수 있어야 한다.
+
+### 6-2. ⚠️ 함정: DP로 풀릴 것이 그리디처럼 보이는 경우
+
+**동전 교환**이 대표. 동전 `[1, 5, 10, 50, 100, 500]`은 그리디로 최적해(큰 것부터 쓰기). 하지만 `[1, 3, 4]`로 `6`을 만들 때:
+
+- 그리디: `4 + 1 + 1 = 3개`
+- 최적 (DP): `3 + 3 = 2개`
+
+**그리디 정답 증명은 항상 필요**. 못 하면 DP로 간다.
+
+### 6-3. 고전 그리디 문제
+
+- **회의실 배정**: 끝나는 시간 순 정렬
+- **동전 교환** (거스름돈, 화폐 단위가 그리디로 되는 경우)
+- **허프만 코딩**: 빈도 낮은 것부터 합치기
+
+* * *
+
+## 7. 위상 정렬
+
+### 7-1. 정의
+
+**DAG (방향성 비순환 그래프)**에서 "선행 관계를 지키는 순서". 한 노드가 다른 노드 앞에 오려면 그 전자가 후자의 선행이어야 한다.
+
+### 7-2. Kahn 알고리즘 (진입 차수 기반)
+
+```js
+function topologicalSort(n, edges) {
+  const graph = Array.from({ length: n }, () => []);
+  const indegree = new Array(n).fill(0);
+  for (const [u, v] of edges) {
+    graph[u].push(v);
+    indegree[v]++;
+  }
+
+  const queue = [];
+  for (let i = 0; i < n; i++) {
+    if (indegree[i] === 0) queue.push(i);
+  }
+
+  const result = [];
+  while (queue.length) {
+    const node = queue.shift();
+    result.push(node);
+    for (const next of graph[node]) {
+      indegree[next]--;
+      if (indegree[next] === 0) queue.push(next);
+    }
+  }
+
+  if (result.length !== n) throw new Error("Cycle detected");
+  return result;
+}
+```
+
+**사이클 감지 덤**: 결과 배열 길이가 n보다 작으면 사이클이 있다.
+
+### 7-3. 실전: 번들러 의존성 해결
+
+`A.js`가 `B.js`를 import하고, `B.js`가 `C.js`를 import한다면 로드 순서는 `C, B, A`. **위상 정렬의 결과**다.
+
+TypeScript 프로젝트의 모듈 로드 순서, `npm install` 의존성 해결, React의 Effect cleanup 순서 등이 전부 같은 원리.
+
+* * *
+
+## 8. 최단 경로
+
+### 8-1. 다익스트라 (Dijkstra)
+
+**음수 가중치 없는** 가중 그래프의 최단 경로.
+
+```js
+function dijkstra(n, graph, start) {
+  const dist = new Array(n).fill(Infinity);
+  dist[start] = 0;
+  const heap = new MinHeap();  // [distance, node]
+  heap.push([0, start]);
+
+  while (heap.size > 0) {
+    const [d, u] = heap.pop();
+    if (d > dist[u]) continue;   // 이미 더 짧게 방문함
+    for (const { to, w } of graph[u] ?? []) {
+      const nd = d + w;
+      if (nd < dist[to]) {
+        dist[to] = nd;
+        heap.push([nd, to]);
+      }
+    }
+  }
+  return dist;
+}
+```
+
+(위 코드는 MinHeap이 튜플을 지원한다고 가정. 실제로는 비교 함수를 인자로 받게 확장해야 한다.)
+
+- 복잡도: **O((V + E) log V)**
+- 왜 MinHeap? "가장 짧은 거리 후보 먼저 확장"이 그리디의 핵심
+
+### 8-2. 벨만-포드
+
+**음수 가중치 허용**. V-1번 모든 간선을 완화.
+
+- O(V × E)
+- 음수 사이클 감지 가능
+
+### 8-3. 플로이드-워셜
+
+**모든 쌍의 최단 거리**.
+
+```js
+function floydWarshall(dist) {
+  const n = dist.length;
+  for (let k = 0; k < n; k++) {
+    for (let i = 0; i < n; i++) {
+      for (let j = 0; j < n; j++) {
+        if (dist[i][k] + dist[k][j] < dist[i][j]) {
+          dist[i][j] = dist[i][k] + dist[k][j];
+        }
+      }
+    }
+  }
+}
+```
+
+- O(V³)
+- 작은 그래프 (V ≤ 500)에만 적합
+
+* * *
+
+## 연습 문제
+
+1. 퀵 정렬의 최악 케이스가 O(n²)인 이유와, 이를 방지하는 피벗 선택 전략을 설명하라.
+2. `[1, 2, 3, 3, 3, 4, 5]`에서 `3`의 `lower_bound`와 `upper_bound`를 이분 탐색으로 구하라.
+3. 피보나치를 메모이제이션(Top-down)과 타뷸레이션(Bottom-up) 양쪽으로 구현하고, 공간 O(1) 버전도 작성하라.
+4. 편집 거리를 DP로 구현하고 `"kitten"` → `"sitting"` 과정을 표로 그려라.
+5. Kahn 알고리즘으로 위상 정렬을 구현하고, 사이클이 있으면 예외를 던지게 하라.
+6. 다익스트라를 MinHeap으로 구현하라. 왜 MaxHeap이면 안 되는지 설명하라.
+7. 동전 `[1, 3, 4]`로 `6`을 만드는 최소 개수를 그리디로 풀면 틀리는 이유를 보이고 DP로 풀어라.
+
+* * *
+
+## 연습 문제 정답
+
+### 1. 퀵 정렬 최악
+
+이미 정렬된 배열 + **첫 원소/마지막 원소를 피벗으로** 선택 시 파티션이 매번 0:n-1로 나뉘어 O(n²). **중간값, 랜덤 피벗, median-of-three**로 예방한다.
+
+### 2. lower/upper bound
+
+```js
+const arr = [1, 2, 3, 3, 3, 4, 5];
+lowerBound(arr, 3);  // 2 (첫 3의 위치)
+upperBound(arr, 3);  // 5 (4의 위치)
+// 개수 = upper - lower = 3
+```
+
+### 3. 피보나치 3버전
+
+```js
+// Top-down
+function fibMemo(n, c = new Map()) {
+  if (n < 2) return n;
+  if (c.has(n)) return c.get(n);
+  const v = fibMemo(n-1, c) + fibMemo(n-2, c);
+  c.set(n, v); return v;
+}
+// Bottom-up
+function fibTab(n) {
+  const dp = [0, 1];
+  for (let i = 2; i <= n; i++) dp[i] = dp[i-1] + dp[i-2];
+  return dp[n];
+}
+// O(1) 공간
+function fibO1(n) {
+  let a = 0, b = 1;
+  for (let i = 0; i < n; i++) [a, b] = [b, a+b];
+  return a;
+}
+```
+
+### 4. 편집 거리 표
+
+```
+     ""  s  i  t  t  i  n  g
+""    0  1  2  3  4  5  6  7
+k     1  1  2  3  4  5  6  7
+i     2  2  1  2  3  4  5  6
+t     3  3  2  1  2  3  4  5
+t     4  4  3  2  1  2  3  4
+e     5  5  4  3  2  2  3  4
+n     6  6  5  4  3  3  2  3   ← 답 3
+```
+
+`kitten → sitten (치환 k→s) → sittin (치환 e→i) → sitting (삽입 g)` 3회.
+
+### 5. Kahn 사이클
+
+본문 `topologicalSort` 그대로. 결과 길이 < n이면 사이클.
+
+### 6. 다익스트라
+
+MinHeap을 쓰는 이유: **"지금까지 확정된 최단 거리가 가장 짧은" 노드부터 확장해야 올바른 결과**를 얻는다. 큰 거리부터 확장하면 나중에 들어올 짧은 경로가 기존 결과를 덮어쓰지 못한다.
+
+### 7. 동전 그리디 오답
+
+```
+그리디: 6 = 4 + 1 + 1 (3개)
+DP:     6 = 3 + 3     (2개)
+
+function coinChange(coins, amount) {
+  const dp = new Array(amount + 1).fill(Infinity);
+  dp[0] = 0;
+  for (let i = 1; i <= amount; i++) {
+    for (const c of coins) {
+      if (c <= i) dp[i] = Math.min(dp[i], dp[i - c] + 1);
+    }
+  }
+  return dp[amount] === Infinity ? -1 : dp[amount];
+}
+coinChange([1, 3, 4], 6);  // 2
+```
+
+그리디는 "큰 동전부터"가 최적임을 **증명해야** 적용 가능. `[1, 3, 4]`처럼 증명 실패하는 집합에선 오답.
+
+* * *
+
+## 체크리스트
+
+- [ ] 비교 정렬의 하한이 Ω(n log n)인 이유를 안다
+- [ ] 퀵/머지/힙/Timsort의 복잡도와 특성 비교가 가능하다
+- [ ] Timsort가 JS `Array.sort()`의 내부임을 안다
+- [ ] 이분 탐색, `lower_bound`, `upper_bound`, 파라메트릭 서치를 구분할 수 있다
+- [ ] 재귀를 반복으로 변환할 수 있다
+- [ ] 백트래킹의 "선택-재귀-취소" 틀과 가지치기를 안다
+- [ ] DP의 두 조건(최적 부분 구조, 중복 부분 문제)을 안다
+- [ ] 메모이제이션과 타뷸레이션 양쪽으로 DP를 구현할 수 있다
+- [ ] 편집 거리 DP를 표로 채울 수 있다
+- [ ] 그리디의 정당성 증명 필요성과 반례를 안다
+- [ ] Kahn 알고리즘으로 위상 정렬을 구현할 수 있다
+- [ ] 번들러 의존성 해결이 위상 정렬임을 안다
+- [ ] 다익스트라가 왜 MinHeap을 쓰는지 설명할 수 있다
+- [ ] 벨만-포드와 플로이드-워셜의 용도 차이를 안다
+
+* * *
+
+**이전**: [1-6. 연결 리스트·트리·그래프](1단계-6-연결-리스트-트리-그래프) | **다음**: [2-1. 네트워크 기초](2단계-1-네트워크-기초)

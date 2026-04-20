@@ -1,180 +1,485 @@
-import { ArrayMemory } from "@/components/diagrams/ArrayMemory";
 
-## 왜 이 장인가
+> 실무에서 가장 자주 쓰는 세 자료구조. **각 연산의 내부 비용과, 언제 Object 대신 Map을, Array 대신 Set을 쓰는지**를 아는 것이 목표.
 
-실무에서 가장 자주 쓰는 세 자료구조는 **배열**, **문자열**, **해시(Map/Set/Object)**다. 이 셋의 "연산 비용"을 감으로 알고 있어야 알고리즘 선택이 몸에 밴다.
+* * *
 
-이 장에서 집중적으로 풀 세 가지 질문.
+## 0. "자료구조"가 뭐야? — 초심자용
 
-1. 배열에서 `push`는 싸고 `unshift`는 왜 비싼가
-2. 문자열이 **불변(immutable)**이라는 말이 실제로 무슨 뜻인가
-3. `Object`, `Map`, `Set`은 무엇을 기준으로 골라야 하는가
+### 0-1. 자료구조는 "데이터를 어떻게 담을 것인가"
 
-## § 1 · 배열 — 연속된 메모리 덩어리
+물건을 수납할 때 상황마다 다른 가구를 쓴다.
 
-배열의 핵심은 **연속**이다. 모든 요소가 메모리에서 나란히 붙어 있고, `a[i]`는 "시작 주소 + i × 요소 크기"로 단번에 도달한다(O(1)).
+- 책: **책장** (순서대로 꽂고 번호로 꺼냄)
+- 옷: **서랍** (카테고리별로 접근)
+- 음식: **냉장고** (칸마다 용도가 다름)
 
-<ArrayMemory />
+데이터도 똑같다. **어떻게 담느냐에 따라 "꺼내기·추가·찾기" 비용이 완전히 다르다.** 자료구조는 이 "담는 방법"의 이름이다.
 
-이 구조가 그대로 연산 비용으로 드러난다.
+### 0-2. 이 장의 세 가지
 
-| 연산 | 복잡도 | 이유 |
+| 자료구조 | 비유 | 강점 | 약점 |
+|---|---|---|---|
+| 배열(Array) | 번호 매긴 사물함 | 번호로 즉시 꺼냄 | 중간 삽입/삭제가 느림 |
+| 문자열(String) | 글자 배열 + 추가 규칙 | 텍스트 처리에 특화 | 한 번 만들면 수정 불가 (불변) |
+| 해시(Hash) | 이름표 붙은 서랍 | 이름으로 즉시 꺼냄 | 순서가 없음 |
+
+### 0-3. 왜 Array, Object 말고 Set, Map도 배우나
+
+JS 개발자는 `Array`와 `Object`만 쓰고도 대부분을 해결한다. 그런데 실무에서 이런 일이 생긴다.
+
+- **중복 제거**: `Array`로 처리하면 O(n²). `Set`으로 하면 O(n).
+- **빈번한 키 조회**: `Object`로도 되지만, 키가 숫자면 문자열로 변환되는 함정이 있음. `Map`은 정확한 타입 유지.
+
+이 장을 이해하면 "왜 `Set`/`Map`이 따로 존재하는가"에 자연스럽게 답할 수 있다.
+
+### 0-4. 복잡도를 놓고 보는 이유
+
+[1-3](1단계-3-복잡도-분석.md)에서 배운 O(1), O(n), O(log n)이 여기서부터 **실제로 차이를 만든다.** "배열 앞에 추가"와 "뒤에 추가"가 왜 1000배 차이 나는지 이 장에서 볼 수 있다.
+
+* * *
+
+## 1. 배열
+
+### 1-1. 배열 연산 비용표
+
+| 연산 | 복잡도 | 비고 |
 |---|---|---|
-| `a[i]` 인덱싱 | **O(1)** | 주소 계산 한 번 |
-| `push` / `pop` | 평균 **O(1)** | 끝에서 작업, 재배치 없음 |
-| `unshift` / `shift` | **O(n)** | 전체를 한 칸 밀어야 함 |
-| `splice(i, k)` | **O(n)** | 뒷부분 전체 재배치 |
-| `slice(i, j)` | **O(k)** | 자를 길이만큼 복사 |
-| `indexOf(x)` | **O(n)** | 선형 스캔 |
+| 인덱싱 `a[i]` | O(1) | 연속 메모리 + 산술 연산 |
+| `push` / `pop` | 평균 O(1) | 끝에서 작업, 분할상환 |
+| `unshift` / `shift` | O(n) | 전부 한 칸씩 밀어야 함 |
+| `splice(i, del, ...insert)` | O(n) | 위치부터 끝까지 재배치 |
+| `slice(i, j)` | O(j - i) | 새 배열 할당 |
+| `concat` | O(n + m) | 새 배열 |
+| `indexOf` / `includes` | O(n) | 선형 검색 |
+| `find` / `filter` / `map` | O(n) | 콜백도 전부 호출됨 |
+| `sort` | O(n log n) | Timsort |
 
-"첫 요소에 뭔가 자주 넣고 빼야 한다"면 배열이 아니라 **덱(Deque)** 구조를 써야 한다(다음 장).
+### 1-2. 왜 `unshift`가 O(n)인가
 
-## § 2 · 문자열 — 왜 불변인가
-
-JS에서 문자열은 만든 뒤 바꿀 수 없다. `s += '!'`는 `s` 객체의 내용을 바꾸는 게 아니라 **새 문자열을 만들어 `s`에 재할당**한다.
-
-```js
-let s = 'abc';
-s += 'd';
-// 동작: 새 문자열 'abcd'를 만들고, s를 새 문자열로 교체
-// 원래 'abc'는 가비지 컬렉션 대상
+```
+before: [A, B, C, D]   (a[0]=A, a[1]=B, ...)
+unshift(X):
+  a[4] = D  ← 한 칸씩 뒤로
+  a[3] = C
+  a[2] = B
+  a[1] = A
+  a[0] = X
+after: [X, A, B, C, D]
 ```
 
-그래서 긴 문자열을 반복해 연결하면 매 단계마다 **전체 복사**가 일어난다 — `n`번 연결이 `O(n²)`이 된다.
+앞에 하나 추가하면 **뒤쪽 전부를 한 칸씩 밀어야** 한다. 10만 원소 배열에 `unshift`를 반복하면 O(n²)이 된다.
 
 ```js
-// 나쁨 — O(n²)
-let out = '';
-for (const x of items) out += x;
+// 피해야 할 패턴
+const result = [];
+for (const item of data) result.unshift(item);
 
-// 좋음 — O(n)
-const parts = [];
-for (const x of items) parts.push(x);
-const out = parts.join('');
+// 대신
+const result = [];
+for (const item of data) result.push(item);
+result.reverse();
 ```
 
-모던 엔진(V8)은 이런 패턴을 어느 정도 최적화하지만, **"불변이라는 사실"과 "배열 + join 패턴이 더 안전하다"**는 감각은 반드시 가지고 있어야 한다.
+### 1-3. ⚠️ 함정: `splice`는 두 얼굴을 가진다
 
-## § 3 · 투 포인터와 슬라이딩 윈도우
-
-배열에서 "특정 조건을 만족하는 구간"을 찾는 문제는 거의 전부 두 패턴으로 풀린다.
-
-### 투 포인터
-
-**정렬된** 배열에서 두 원소의 합이 목표값이 되는 쌍 찾기.
+`splice`는 **삭제 + 삽입**을 한 번에 할 수 있다.
 
 ```js
-function twoSum(sorted, target) {
-  let l = 0, r = sorted.length - 1;
-  while (l < r) {
-    const sum = sorted[l] + sorted[r];
-    if (sum === target) return [l, r];
-    if (sum < target) l++;      // 키운다
-    else              r--;      // 줄인다
+const arr = [1, 2, 3, 4, 5];
+arr.splice(2, 1);           // 2번 인덱스 1개 제거 → [1, 2, 4, 5]
+arr.splice(2, 0, 99, 100);  // 2번 인덱스에 삽입 → [1, 2, 99, 100, 4, 5]
+arr.splice(0, 2, 'a');      // 0번부터 2개 제거 + 'a' 삽입 → ['a', 99, 100, 4, 5]
+```
+
+인덱스 위치에 따라 O(1) ~ O(n)까지 변동이 크다. **끝에서 할 거면 `pop/push`가 낫다.**
+
+### 1-4. `slice` vs `splice`
+
+혼동하기 쉽다.
+
+- `slice(start, end)`: 원본 유지, **새 배열 반환**
+- `splice(start, deleteCount, ...items)`: **원본 수정**, 제거된 요소를 반환
+
+```js
+const a = [1, 2, 3, 4];
+a.slice(1, 3);     // [2, 3], a = [1, 2, 3, 4] (그대로)
+a.splice(1, 2);    // [2, 3], a = [1, 4] (수정됨)
+```
+
+* * *
+
+## 2. 문자열
+
+### 2-1. 문자열은 불변(Immutable)이다
+
+```js
+const s = "hello";
+s[0] = "H";        // 조용히 무시됨 (strict mode에선 에러)
+s;                 // "hello"
+```
+
+문자열을 "수정"하는 것처럼 보이는 모든 연산은 **새 문자열 객체를 만든다**.
+
+```js
+let s = "";
+for (let i = 0; i < 10000; i++) {
+  s += "x";   // 매번 새 문자열 생성
+}
+```
+
+매 반복마다 `s + "x"`가 새 문자열을 할당하므로, **총 할당 비용은 O(n²)**. n=10000 정도까진 괜찮지만, n=100000이면 체감된다.
+
+### 2-2. 긴 문자열 빌드는 배열로
+
+```js
+const chunks = [];
+for (let i = 0; i < 10000; i++) chunks.push("x");
+const s = chunks.join("");   // O(n)
+```
+
+현대 V8은 `+=`도 어느 정도 최적화하지만 (ConsString), **대량 반복이면 배열 빌드가 여전히 안전하다**.
+
+### 2-3. 문자열 비교는 O(n)
+
+```js
+"foobar" === "foobaz";  // O(min(|a|, |b|))
+```
+
+해시 조회에 문자열 키를 쓰면, 해시 계산 O(k) + 충돌 시 키 비교 O(k)가 붙는다. 짧은 문자열이면 괜찮지만, 수 KB 문자열을 키로 쓰는 건 피해야 한다.
+
+### 2-4. 투 포인터 / 슬라이딩 윈도우
+
+**투 포인터**: 양쪽에서 두 인덱스를 좁혀온다. 정렬된 배열에서 쌍을 찾을 때 유용.
+
+```js
+// 정렬된 배열에서 두 수의 합 = target
+function twoSum(arr, target) {
+  let lo = 0, hi = arr.length - 1;
+  while (lo < hi) {
+    const sum = arr[lo] + arr[hi];
+    if (sum === target) return [lo, hi];
+    if (sum < target) lo++;
+    else hi--;
   }
   return null;
 }
-// 시간: O(n), 공간: O(1)
 ```
 
-정렬이 이미 되어 있다면 이중 루프(O(n²))가 **O(n)**으로 내려간다.
-
-### 슬라이딩 윈도우
-
-연속 부분의 합이 `k`가 되는 구간 찾기.
+**슬라이딩 윈도우**: 연속 부분 구간을 움직이면서 상태를 유지.
 
 ```js
-function windowSum(arr, k) {
-  let sum = 0, start = 0, count = 0;
-  for (let end = 0; end < arr.length; end++) {
-    sum += arr[end];
-    while (sum > k) sum -= arr[start++]; // 왼쪽 줄이기
-    if (sum === k) count++;
+// 크기 k 윈도우의 최대 합
+function maxSumOfSize(arr, k) {
+  let sum = 0;
+  for (let i = 0; i < k; i++) sum += arr[i];
+  let max = sum;
+  for (let i = k; i < arr.length; i++) {
+    sum += arr[i] - arr[i - k];
+    max = Math.max(max, sum);
+  }
+  return max;
+}
+```
+
+매 반복마다 **새로 계산하지 않고 차분만 갱신**. O(n·k) → O(n).
+
+* * *
+
+## 3. 해시 테이블
+
+### 3-1. 내부 동작
+
+```
+key  ─→ hash(key) ─→ index = hash % size ─→ bucket[index]
+```
+
+1. 해시 함수로 키를 숫자로
+2. `% size`로 버킷 인덱스
+3. 해당 버킷에 저장
+
+### 3-2. 충돌 해결
+
+**체이닝 (Separate Chaining)**: 각 버킷이 연결 리스트. 같은 인덱스로 온 항목들이 리스트로 연결.
+
+```
+bucket[3] → (key1, v1) → (key2, v2)
+```
+
+**개방 주소법 (Open Addressing)**: 충돌하면 다른 빈 버킷을 찾음. 선형 탐사, 이차 탐사, 더블 해싱.
+
+JS의 `Map`/`Set`은 V8에서 **체이닝에 가까운 변형** (OrderedHashTable)을 쓴다. 순서 보장이 필요하기 때문.
+
+### 3-3. 평균 O(1), 최악 O(n)
+
+평균적으로 충돌이 드물면 버킷 하나당 소수의 항목만 있으므로 **조회 O(1)**. 모든 키가 같은 버킷에 들어가는 최악의 경우 연결 리스트 끝까지 훑어야 하므로 **O(n)**.
+
+실무에선 대개 무시할 수 있지만, **해시 DoS 공격**이 가능한 맥락(공개 API에서 사용자 입력을 키로 쓸 때)에선 주의해야 한다.
+
+### 3-4. 로드 팩터 (Load Factor)
+
+```
+load factor = 항목 수 / 버킷 수
+```
+
+로드 팩터가 너무 높으면 충돌 증가. 대부분의 구현은 0.7~0.75를 넘으면 **리사이즈 (rehash)** 한다. 버킷을 2배로 늘리고 모든 키를 재삽입. O(n)이지만 분할상환으로 O(1).
+
+* * *
+
+## 4. Object vs Map vs Set
+
+### 4-1. 비교표
+
+| | Object `{}` | Map | Set |
+|---|---|---|---|
+| 키 타입 | 문자열/Symbol | 임의의 값 | (값만 저장) |
+| 순서 | 특수 규칙 | 삽입 순서 | 삽입 순서 |
+| 크기 조회 | `Object.keys(o).length` O(n) | `m.size` O(1) | `s.size` O(1) |
+| 프로토타입 오염 | O | X | X |
+| 순회 | 키만 직접 안 됨 | `for...of`로 직접 | `for...of`로 직접 |
+| JSON 직렬화 | O | X | X |
+| 성능 (대량 삽입) | 느림 | 빠름 | 빠름 |
+
+### 4-2. Object를 쓸 때
+
+- 고정된 스키마 (user 객체, 설정 등)
+- JSON 직렬화가 필요한 경우
+- 키가 확정된 enum 역할
+
+### 4-3. Map을 쓸 때
+
+- **동적으로 추가/삭제되는 키**
+- 키가 객체인 경우
+- 빈번한 조회·삽입이 있는 경우
+
+```js
+const userById = new Map();
+userById.set(123, { name: "A" });
+userById.set(456, { name: "B" });
+userById.get(123);   // { name: "A" }
+userById.has(999);   // false
+userById.delete(123);
+userById.size;       // 1
+```
+
+### 4-4. ⚠️ 함정: Object의 프로토타입 오염
+
+```js
+const obj = {};
+obj.constructor;      // ƒ Object() { [native code] }
+obj.__proto__;        // Object.prototype
+```
+
+`{}`로 만든 객체는 `Object.prototype`을 상속하므로 `"constructor"`, `"__proto__"`, `"toString"` 같은 상속된 속성이 보인다. 사용자 입력을 키로 쓰면 **악의적 삽입으로 프로토타입 체인이 오염**된다.
+
+```js
+const safe = Object.create(null);  // 프로토타입 없는 순수 사전
+```
+
+또는 `Map`을 쓰면 안전.
+
+### 4-5. Set의 활용
+
+```js
+// 중복 제거
+const unique = [...new Set(arr)];
+
+// 두 배열의 교집합
+const intersection = [...new Set(a)].filter(x => bSet.has(x));
+
+// 포함 여부 빠르게
+const allowed = new Set(['admin', 'editor']);
+allowed.has(user.role);
+```
+
+* * *
+
+## 5. FE 실전 예시
+
+### 5-1. 그룹핑
+
+```js
+// 카테고리별 상품 그룹
+function groupByCategory(products) {
+  const groups = new Map();
+  for (const p of products) {
+    if (!groups.has(p.category)) groups.set(p.category, []);
+    groups.get(p.category).push(p);
+  }
+  return groups;
+}
+```
+
+### 5-2. 캐시
+
+```js
+const cache = new Map();
+
+function memoizedFib(n) {
+  if (cache.has(n)) return cache.get(n);
+  const result = n < 2 ? n : memoizedFib(n - 1) + memoizedFib(n - 2);
+  cache.set(n, result);
+  return result;
+}
+```
+
+### 5-3. 태그 필터
+
+```js
+// 선택된 태그를 Set으로 유지 → O(1) 체크
+const selectedTags = new Set(["react", "typescript"]);
+
+posts.filter(p => p.tags.some(t => selectedTags.has(t)));
+```
+
+### 5-4. 해시로 O(n²) → O(n)
+
+**두 수의 합** 문제.
+
+```js
+// O(n²)
+function twoSumSlow(arr, target) {
+  for (let i = 0; i < arr.length; i++) {
+    for (let j = i + 1; j < arr.length; j++) {
+      if (arr[i] + arr[j] === target) return [i, j];
+    }
+  }
+}
+
+// O(n)
+function twoSumFast(arr, target) {
+  const seen = new Map();
+  for (let i = 0; i < arr.length; i++) {
+    const need = target - arr[i];
+    if (seen.has(need)) return [seen.get(need), i];
+    seen.set(arr[i], i);
+  }
+}
+```
+
+"배열 순회 + 해시 조회"는 수많은 알고리즘 문제의 공통 패턴이다.
+
+* * *
+
+## 연습 문제
+
+1. 배열 중복 제거를 세 가지 방법(`filter + indexOf`, `reduce`, `Set`)으로 구현하고 복잡도를 비교하라.
+2. 문자열 `"aabbccdd"`에서 각 문자의 빈도를 세라. (Map, Object 두 방식)
+3. 정렬된 두 배열을 합쳐 새 정렬 배열을 만드는 `mergeSorted(a, b)`를 투 포인터로 구현하라.
+4. 길이 `n`의 배열에서 연속 `k`개 합이 최대가 되는 구간을 슬라이딩 윈도우로 구하라.
+5. `Object.create(null)`과 `{}`의 차이를 `"toString" in obj`로 확인하라.
+6. 해시 DoS 공격이 가능한 코드 예시를 만들고, Map으로 바꿔 방어하라.
+
+* * *
+
+## 연습 문제 정답
+
+### 1. 중복 제거 3가지
+
+```js
+// filter + indexOf: O(n²)
+arr.filter((x, i) => arr.indexOf(x) === i);
+
+// reduce: O(n) 평균
+arr.reduce((acc, x) => acc.includes(x) ? acc : [...acc, x], []);
+// ⚠️ 이 reduce도 includes 때문에 O(n²). 아래가 O(n):
+arr.reduce((acc, x) => { acc.add(x); return acc; }, new Set());
+
+// Set: O(n)
+[...new Set(arr)];
+```
+
+### 2. 빈도 세기
+
+```js
+const s = "aabbccdd";
+
+// Map
+const freq = new Map();
+for (const ch of s) freq.set(ch, (freq.get(ch) ?? 0) + 1);
+
+// Object
+const freqObj = {};
+for (const ch of s) freqObj[ch] = (freqObj[ch] ?? 0) + 1;
+```
+
+### 3. 정렬 배열 병합
+
+```js
+function mergeSorted(a, b) {
+  const result = [];
+  let i = 0, j = 0;
+  while (i < a.length && j < b.length) {
+    if (a[i] <= b[j]) result.push(a[i++]);
+    else result.push(b[j++]);
+  }
+  while (i < a.length) result.push(a[i++]);
+  while (j < b.length) result.push(b[j++]);
+  return result;
+}
+```
+
+### 4. 슬라이딩 윈도우
+
+```js
+function maxSubarraySum(arr, k) {
+  let sum = 0;
+  for (let i = 0; i < k; i++) sum += arr[i];
+  let max = sum, maxStart = 0;
+  for (let i = k; i < arr.length; i++) {
+    sum += arr[i] - arr[i - k];
+    if (sum > max) { max = sum; maxStart = i - k + 1; }
+  }
+  return { max, range: [maxStart, maxStart + k - 1] };
+}
+```
+
+### 5. 프로토타입 차이
+
+```js
+const a = {};
+const b = Object.create(null);
+"toString" in a;  // true  (Object.prototype에서 상속)
+"toString" in b;  // false (프로토타입 없음)
+```
+
+### 6. 해시 DoS → Map
+
+```js
+// 취약한 코드: 공격자가 "__proto__"를 키로 넣으면 체인 오염
+function countByKey(items) {
+  const count = {};
+  for (const item of items) {
+    count[item.key] = (count[item.key] ?? 0) + 1;
+  }
+  return count;
+}
+
+// 방어: Map 사용
+function countByKeySafe(items) {
+  const count = new Map();
+  for (const item of items) {
+    count.set(item.key, (count.get(item.key) ?? 0) + 1);
   }
   return count;
 }
 ```
 
-"한 번 본 요소는 다시 보지 않는다"가 핵심. 각 요소가 윈도우에 **한 번 들어오고 한 번 나가므로** 총 O(n).
+* * *
 
-## § 4 · 해시 테이블의 내부
+## 체크리스트
 
-`Map`과 `Set`의 평균 O(1)은 공짜가 아니다.
+- [ ] 배열 연산 비용표를 즉답할 수 있다
+- [ ] `unshift`가 O(n)인 이유를 메모리 배치로 설명할 수 있다
+- [ ] `slice`와 `splice`의 차이를 안다
+- [ ] 문자열 불변성과 `+=` 루프의 비용을 안다
+- [ ] 긴 문자열 빌드에 `Array.join`을 쓰는 이유를 안다
+- [ ] 투 포인터와 슬라이딩 윈도우의 차이를 안다
+- [ ] 해시 테이블의 충돌 해결 방식 2가지를 안다 (체이닝, 개방 주소법)
+- [ ] 해시 테이블이 최악 O(n)인 조건을 안다
+- [ ] Object vs Map vs Set 선택 기준을 안다
+- [ ] 프로토타입 오염 위험과 `Object.create(null)`을 안다
+- [ ] 해시를 써서 O(n²) → O(n)으로 줄이는 패턴을 쓸 수 있다
 
-<div className="diagram-frame">
-  <svg viewBox="0 0 560 230" className="w-full h-auto" xmlns="http://www.w3.org/2000/svg">
-    <text x={30} y={30} fill="#8f2d20" fontFamily="var(--font-display)" fontStyle="italic" fontSize={16}>
-      1. hash(key) → 버킷 인덱스
-    </text>
-    <text x={30} y={55} fill="#3a5142" fontFamily="var(--font-mono)" fontSize={13}>
-      hash("apple") % 8 → 3
-    </text>
-    <g>
-      {[0,1,2,3,4,5,6,7].map(i => (
-        <g key={i}>
-          <rect x={30 + i*60} y={85} width={55} height={40} fill={i === 3 ? "#b3791f" : "#faf6eb"} stroke="#1d1913" strokeWidth={1.3} />
-          <text x={30 + i*60 + 27} y={110} textAnchor="middle" fill={i === 3 ? "#faf6eb" : "#7a6e57"} fontFamily="var(--font-display)" fontStyle="italic" fontSize={14}>
-            {i}
-          </text>
-        </g>
-      ))}
-    </g>
-    <text x={175} y={165} fill="#8f2d20" fontFamily="var(--font-hand)" fontSize={17}>
-      ↓ 3번 버킷에 체인 연결
-    </text>
-    <g transform="translate(150, 175)">
-      <rect x={0} y={0} width={90} height={30} fill="#faf6eb" stroke="#1d1913" strokeWidth={1.2} />
-      <text x={45} y={20} textAnchor="middle" fontFamily="var(--font-mono)" fontSize={11}>apple:1</text>
-      <line x1={90} y1={15} x2={110} y2={15} stroke="#1d1913" strokeWidth={1.2} markerEnd="url(#h-arr)" />
-      <rect x={110} y={0} width={90} height={30} fill="#faf6eb" stroke="#1d1913" strokeWidth={1.2} />
-      <text x={155} y={20} textAnchor="middle" fontFamily="var(--font-mono)" fontSize={11}>crab:7</text>
-    </g>
-    <defs>
-      <marker id="h-arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth={5} markerHeight={5} orient="auto">
-        <path d="M0,0 L10,5 L0,10 z" fill="#1d1913" />
-      </marker>
-    </defs>
-  </svg>
-  <figcaption className="diagram-caption">해시 충돌은 체이닝으로 — 같은 버킷에 여러 항목</figcaption>
-</div>
+* * *
 
-**평균 O(1)**은 해시 함수가 키를 버킷에 **고르게** 분산시킨다는 가정 하에서다. 모든 키가 한 버킷에 몰리면(pathological case) **최악 O(n)**. 이 경우 보안 취약점(해시 충돌 DoS)이 되기도 한다.
-
-## § 5 · Object vs Map vs Set
-
-실무 판단 기준:
-
-| 기준 | Object | Map | Set |
-|---|---|---|---|
-| 키 타입 | 문자열/심볼만 | 모든 값 | 값만(중복 없음) |
-| 삽입 순서 유지 | 부분적 | **완전 보장** | 완전 보장 |
-| 크기 조회 | `Object.keys(o).length` — O(n) | `m.size` — **O(1)** | `s.size` — O(1) |
-| 기본값(프로토타입) | 있음 — 오염 위험 | 없음 — 깨끗 | 없음 |
-| JSON 직렬화 | 기본 지원 | 커스텀 필요 | 커스텀 필요 |
-| 반복 | 별도 API 필요 | 내장 `for...of` | 내장 `for...of` |
-
-정리하면:
-
-- **JSON 입출력**이 목적이면 `Object`
-- **키에 객체**가 들어가거나, **삽입 순서**가 중요하거나, **빈번한 크기 조회**가 있으면 `Map`
-- **중복 판정 + 집합 연산**이면 `Set`
-
-```js
-// "이 사용자가 이미 본 글인가?"
-const seen = new Set();
-seen.add(postId);
-seen.has(postId); // O(1)
-
-// "글 ID → 읽은 시간"
-const readAt = new Map();
-readAt.set(postId, Date.now());
-```
-
-## § 6 · 체크포인트
-
-- [ ] `a[i]`가 왜 O(1)인지 메모리 레이아웃으로 설명할 수 있다
-- [ ] `unshift`가 O(n)인 이유를 그림으로 그릴 수 있다
-- [ ] 반복 문자열 연결이 왜 O(n²)이 되는지 안다
-- [ ] 투 포인터가 이중 루프를 어떻게 단일 순회로 바꾸는지 안다
-- [ ] 해시 테이블이 최악 O(n)이 되는 조건을 안다
-- [ ] Map과 Object를 어떤 기준으로 구분해 쓰는지 즉답할 수 있다
+**이전**: [1-3. 복잡도 분석](1단계-3-복잡도-분석) | **다음**: [1-5. 스택·큐·힙](1단계-5-스택-큐-힙)

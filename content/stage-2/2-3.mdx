@@ -1,0 +1,535 @@
+
+> **REST, GraphQL, WebSocket, SSE**. 각 API 스타일의 적합한 맥락과 함정. "왜 이 서비스는 GraphQL을 썼을까"에 답할 수 있어야 한다.
+
+* * *
+
+## 0. API란 무엇인가 — 먼저 개념부터
+
+### 0-1. API의 정의
+
+> **API (Application Programming Interface)**: "프로그램이 다른 프로그램과 대화하는 방법에 대한 약속"
+
+사람끼리 대화할 때 **언어**와 **예절**이 있듯이, 프로그램끼리도 "이런 요청을 이런 형식으로 보내면, 이런 형식으로 답한다"는 약속이 있다. 이 약속의 공식 문서가 API다.
+
+### 0-2. 식당 메뉴판 비유
+
+*   **메뉴판**: API 문서. "어떤 요청이 가능한가"
+*   **종업원**: API 엔드포인트. 주문을 받고 주방에 전달
+*   **주방**: 서버 내부 로직. 직접 볼 수 없지만 주문을 처리
+*   **손님**: 클라이언트 (FE 앱)
+
+손님은 주방 내부를 모르고도 메뉴를 보고 원하는 걸 주문할 수 있다. **API는 내부 구현을 숨기고 사용 방법만 드러낸다** — 이것을 **인터페이스**라고 부른다.
+
+### 0-3. Web API는 왜 필요한가
+
+FE(브라우저에서 도는 JS)는 DB에 직접 접근할 수 없다. 대신 서버에 HTTP 요청을 보내고, 서버가 DB에서 데이터를 꺼내 JSON으로 돌려준다.
+
+```
+[브라우저 JS] ──HTTP──▶ [서버] ──SQL──▶ [DB]
+              ◀──JSON──       ◀──행───
+```
+
+이 흐름에서 **"브라우저와 서버 사이의 약속"**이 Web API다. 이 챕터는 그 약속의 다양한 스타일(REST, GraphQL, WebSocket 등)을 다룬다.
+
+### 0-4. 이 챕터의 스타일 선택 미리보기
+
+| 스타일 | 한 줄 요약 | 대표 사용처 |
+|--------|----------|-----------|
+| **REST** | URL이 리소스, 메서드가 동작 | 대부분의 공개 API |
+| **GraphQL** | 클라이언트가 필요한 필드만 쿼리 | GitHub, Shopify |
+| **WebSocket** | 양방향 영구 연결 | 채팅, 게임 |
+| **SSE** | 서버→클라 단방향 푸시 | 실시간 알림, 시세 |
+| **Long Polling** | HTTP로 흉내 내는 실시간 | 구식 환경 폴백 |
+| **gRPC** | 바이너리 + 스트리밍 | 백엔드 MSA 내부 |
+
+이 표를 머리에 넣고 아래 각 섹션을 읽으면 빠르다.
+
+* * *
+
+## 1. REST
+
+### 1-1. 원칙
+
+*   **리소스 중심**: URL이 리소스를 가리킴 (`/users`, `/users/1/posts`)
+*   **HTTP 메서드로 동작 표현**: `GET`, `POST`, `PUT`, `DELETE`
+*   **무상태**: 각 요청은 독립
+*   **표현 계층**: 같은 리소스를 JSON/XML 등으로 다양하게 표현
+
+### 1-2. 리소스 설계 예시
+
+```
+GET    /users          → 목록
+POST   /users          → 생성
+GET    /users/1        → 조회
+PUT    /users/1        → 전체 교체
+PATCH  /users/1        → 부분 수정
+DELETE /users/1        → 삭제
+GET    /users/1/posts  → 해당 유저의 글 목록
+```
+
+동사 대신 명사를 쓴다. `/getUser` (X) → `GET /users/1` (O).
+
+### 1-3. HATEOAS
+
+"Hypermedia As The Engine Of Application State". **응답에 다음 액션의 링크를 포함**.
+
+```json
+{
+  "id": 1, "name": "Alice",
+  "_links": {
+    "self": "/users/1",
+    "posts": "/users/1/posts",
+    "delete": { "href": "/users/1", "method": "DELETE" }
+  }
+}
+```
+
+이론적 REST의 완성이지만 **실무에선 거의 무시**된다. 프론트엔드가 이미 엔드포인트를 알고 있기 때문.
+
+### 1-4. REST의 한계
+
+*   **오버페칭 (Over-fetching)**: 필요 없는 필드까지 받음
+*   **언더페칭 (Under-fetching)**: 한 화면에 여러 엔드포인트 호출 필요
+*   **버전 관리 어려움**: `/v1/...`, `/v2/...` 병존
+
+GraphQL이 등장한 배경.
+
+* * *
+
+## 2. GraphQL
+
+### 2-1. 핵심 특징
+
+*   **단일 엔드포인트** (대개 `/graphql`)
+*   **쿼리 언어**: 필요한 필드만 명시
+*   **타입 시스템**: 스키마로 계약 명시
+
+### 2-2. 쿼리 예시
+
+```graphql
+query {
+  user(id: 1) {
+    name
+    posts(first: 5) {
+      title
+      comments {
+        author { name }
+      }
+    }
+  }
+}
+```
+
+응답은 쿼리와 **정확히 같은 구조**.
+
+```json
+{
+  "data": {
+    "user": {
+      "name": "Alice",
+      "posts": [{ "title": "...", "comments": [...] }]
+    }
+  }
+}
+```
+
+### 2-3. 장점
+
+*   **정확한 데이터**: 필요한 만큼만
+*   **한 번의 요청**: 여러 리소스 조합
+*   **강력한 타입**: 자동 완성, 검증
+
+### 2-4. 단점과 함정
+
+*   **캐싱 어려움**: 모두 POST에 같은 URL → HTTP 캐시 안 됨
+*   **복잡도**: 스키마 설계, 리졸버 작성 부담
+*   **N+1 문제**: 중첩된 필드가 각자 DB 쿼리를 내면 폭증
+
+### 2-5. N+1 문제와 Dataloader
+
+```graphql
+query {
+  posts {      # 1번 쿼리
+    title
+    author {   # N개 포스트 각각 DB 쿼리 → 총 N+1번
+      name
+    }
+  }
+}
+```
+
+**Dataloader** 패턴으로 해결: 같은 틱 안의 `author(id)` 호출들을 모아 `authors(ids: [...])` 배치 쿼리로 한 번에 처리.
+
+```javascript
+const userLoader = new DataLoader(async (ids) => {
+  const users = await db.users.findMany({ where: { id: { in: ids } } });
+  return ids.map(id => users.find(u => u.id === id));
+});
+```
+
+* * *
+
+## 3. WebSocket
+
+### 3-1. 특징
+
+*   **양방향 통신**: 서버와 클라이언트 모두 자유롭게 전송
+*   **영구 연결**: 한 번 수립되면 유지
+*   **HTTP로 시작, 프로토콜 전환**: `101 Switching Protocols`
+
+### 3-2. 핸드셰이크
+
+```
+클라이언트:
+GET /chat HTTP/1.1
+Host: example.com
+Upgrade: websocket
+Connection: Upgrade
+Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==
+Sec-WebSocket-Version: 13
+
+서버:
+HTTP/1.1 101 Switching Protocols
+Upgrade: websocket
+Connection: Upgrade
+Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=
+```
+
+이후부터는 WebSocket 프레임으로 양방향 통신.
+
+### 3-3. JS 클라이언트
+
+```javascript
+const ws = new WebSocket('wss://chat.example.com/');
+ws.onopen = () => ws.send('hello');
+ws.onmessage = (e) => console.log(e.data);
+ws.onclose = () => console.log('closed');
+ws.onerror = (e) => console.error(e);
+```
+
+### 3-4. 용도
+
+*   실시간 채팅
+*   실시간 주가/스포츠 점수
+*   협업 편집기 (Google Docs 같은)
+*   멀티플레이 게임
+
+### 3-5. 운영 이슈
+
+*   **재연결 로직**: 네트워크 끊기면 자동 재접속. Exponential Backoff 필수
+*   **하트비트**: 주기적 ping으로 연결 생존 확인
+*   **수평 확장**: 연결이 상태라, 서버 간 메시지 브로드캐스트 필요 (Redis pub/sub 등)
+
+* * *
+
+## 4. SSE (Server-Sent Events)
+
+### 4-1. 특징
+
+*   **단방향**: 서버 → 클라이언트만
+*   **HTTP 기반**: 프로토콜 전환 없음
+*   **자동 재연결**: 브라우저가 기본 제공
+
+### 4-2. 예시
+
+```javascript
+const es = new EventSource('/events');
+es.onmessage = (e) => console.log(JSON.parse(e.data));
+es.addEventListener('custom', (e) => console.log(e.data));
+```
+
+서버 응답:
+
+```
+Content-Type: text/event-stream
+
+data: {"type": "update", "value": 42}
+
+event: custom
+data: hello
+```
+
+### 4-3. WebSocket vs SSE
+
+| | WebSocket | SSE |
+|---|-----------|-----|
+| 방향 | 양방향 | 서버→클라 |
+| 프로토콜 | 전용 | HTTP |
+| 재연결 | 직접 구현 | 자동 |
+| 방화벽/프록시 | 간혹 막힘 | 일반 HTTP와 같음 |
+| 바이너리 | 가능 | 텍스트만 |
+| 복잡도 | 높음 | 낮음 |
+
+**서버→클라만 필요**하면 SSE가 단순하고 안정적. **양방향**이면 WebSocket.
+
+* * *
+
+## 5. Long Polling
+
+### 5-1. 동작
+
+```
+클라이언트: GET /updates  (이벤트 생길 때까지 대기)
+서버: (30초 대기) → 새 이벤트 생기면 즉시 응답, 또는 타임아웃
+클라이언트: 응답 받자마자 다시 GET /updates
+```
+
+HTTP만으로 실시간 비슷한 효과. **WebSocket/SSE가 안 될 때의 폴백**.
+
+### 5-2. Short Polling과의 차이
+
+*   Short polling: 3초마다 주기적 요청 → 변화 없어도 트래픽
+*   Long polling: 변화 있을 때만 응답 → 효율적이지만 서버 자원 점유
+
+* * *
+
+## 6. Fetch와 Axios
+
+### 6-1. Fetch 기본
+
+```javascript
+const response = await fetch('/api/users', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ name: 'Alice' }),
+});
+if (!response.ok) throw new Error(`HTTP ${response.status}`);
+const data = await response.json();
+```
+
+### 6-2. ⚠️ 함정: `fetch`는 4xx/5xx를 reject하지 않는다
+
+```javascript
+try {
+  const res = await fetch('/404');
+  // 여기 도달! res.ok === false, status === 404
+} catch (e) {
+  // 네트워크 오류만 여기로
+}
+```
+
+명시적으로 `res.ok`를 체크해야 한다. Axios는 기본적으로 4xx/5xx를 에러로 throw.
+
+### 6-3. AbortController
+
+요청 취소. SPA에서 **라우트 이동 시 이전 요청 취소**가 흔한 패턴.
+
+```javascript
+const controller = new AbortController();
+fetch('/api/data', { signal: controller.signal });
+// 필요 시
+controller.abort();
+```
+
+React에서:
+
+```javascript
+useEffect(() => {
+  const controller = new AbortController();
+  fetch(`/posts/${id}`, { signal: controller.signal })
+    .then(r => r.json())
+    .then(setData)
+    .catch(e => {
+      if (e.name === 'AbortError') return;
+      setError(e);
+    });
+  return () => controller.abort();
+}, [id]);
+```
+
+### 6-4. Axios 인터셉터
+
+요청/응답을 가로채 공통 로직 삽입.
+
+```javascript
+axios.interceptors.request.use((config) => {
+  const token = localStorage.getItem('token');
+  if (token) config.headers.Authorization = `Bearer ${token}`;
+  return config;
+});
+
+axios.interceptors.response.use(
+  (response) => response,
+  async (error) => {
+    if (error.response?.status === 401) {
+      await refreshToken();
+      return axios.request(error.config);  // 재시도
+    }
+    return Promise.reject(error);
+  }
+);
+```
+
+### 6-5. 재시도 전략: Exponential Backoff
+
+```javascript
+async function retry(fn, maxRetries = 3) {
+  for (let i = 0; i < maxRetries; i++) {
+    try {
+      return await fn();
+    } catch (e) {
+      if (i === maxRetries - 1) throw e;
+      const delay = Math.min(1000 * 2 ** i, 10000) + Math.random() * 500;
+      await new Promise(r => setTimeout(r, delay));
+    }
+  }
+}
+```
+
+*   **지수 증가**: 1초, 2초, 4초...
+*   **지터(jitter) 추가**: 동시 재시도로 서버 부하 쏠림 방지
+
+* * *
+
+## 7. gRPC (개요)
+
+Google 개발. HTTP/2 위에서 Protocol Buffers (바이너리) 기반.
+
+*   **빠름, 작음**: 바이너리라 JSON보다 효율
+*   **스트리밍 지원**: 양방향, 서버, 클라 스트림
+*   **브라우저에서 직접 사용 불가**: gRPC-Web + 프록시 필요
+
+주로 **백엔드 마이크로서비스 간 통신**에 쓰인다. FE에선 드물다.
+
+* * *
+
+## 8. 선택 가이드
+
+| 상황 | 추천 |
+|-----|------|
+| 단순 CRUD, 캐싱 중요 | **REST** |
+| 다양한 UI가 다른 필드 조합 필요 | **GraphQL** |
+| 실시간 양방향 (채팅, 게임) | **WebSocket** |
+| 서버→클라 이벤트 푸시 | **SSE** |
+| 실시간 안 되는 환경 폴백 | **Long Polling** |
+| 마이크로서비스 내부 | **gRPC** |
+
+* * *
+
+## 연습 문제
+
+1.  같은 "사용자 목록 + 각 사용자의 최근 글" 요구를 REST와 GraphQL로 각각 설계하라.
+2.  GraphQL N+1 문제가 발생하는 쿼리를 작성하고 Dataloader로 해결하라.
+3.  WebSocket 채팅 앱에서 재연결 로직을 Exponential Backoff로 구현하라.
+4.  SSE와 WebSocket 중 "주식 시세 실시간 조회"에 더 적합한 것은 무엇인가? 이유와 함께.
+5.  `fetch('/api/nonexistent')`의 응답이 404일 때 catch 블록이 실행되지 않는 이유를 설명하라.
+6.  AbortController를 써서 사용자가 빠르게 검색어를 타이핑할 때 이전 요청을 취소하는 훅을 작성하라.
+
+* * *
+
+## 연습 문제 정답
+
+### 1. REST vs GraphQL 설계
+
+**REST**:
+
+```
+GET /users?limit=10
+// 각 user별로
+GET /users/:id/posts?limit=1
+// 또는 백엔드가 포함 필드 지원
+GET /users?limit=10&include=recent_post
+```
+
+**GraphQL**:
+
+```graphql
+query {
+  users(first: 10) {
+    name
+    recentPost: posts(first: 1) { title, createdAt }
+  }
+}
+```
+
+GraphQL은 한 번의 요청으로 끝. REST는 백엔드가 `include` 같은 확장을 지원하거나 호출 여러 번.
+
+### 2. N+1과 Dataloader
+
+```
+# N+1 발생: 각 post의 author가 개별 쿼리
+query { posts { id, author { name } } }
+```
+
+**Dataloader**:
+
+```javascript
+const userLoader = new DataLoader(async (ids) => {
+  const users = await db.user.findMany({ where: { id: { in: ids } } });
+  return ids.map(id => users.find(u => u.id === id));
+});
+
+const resolvers = {
+  Post: { author: (post) => userLoader.load(post.authorId) },
+};
+```
+
+같은 틱의 `load()` 호출들이 하나의 배치 쿼리로 묶인다.
+
+### 3. WebSocket 재연결
+
+```javascript
+class ReconnectingWS {
+  constructor(url) {
+    this.url = url;
+    this.attempts = 0;
+    this.connect();
+  }
+  connect() {
+    this.ws = new WebSocket(this.url);
+    this.ws.onopen = () => { this.attempts = 0; };
+    this.ws.onclose = () => {
+      const delay = Math.min(1000 * 2 ** this.attempts, 30000) + Math.random() * 500;
+      this.attempts++;
+      setTimeout(() => this.connect(), delay);
+    };
+  }
+}
+```
+
+### 4. SSE vs 주식 시세
+
+**SSE**. 시세는 서버→클라 단방향이면 충분. SSE는 브라우저가 재연결을 자동 처리하고 HTTP와 같아 프록시/방화벽 문제가 적다. WebSocket은 과한 선택.
+
+### 5. fetch 404
+
+`fetch`는 네트워크 레벨에서 응답을 받으면 **성공**으로 간주. HTTP 상태 코드 4xx/5xx는 에러가 아닌 "받은 응답". 오직 네트워크 단절, CORS 차단, Abort에서만 reject한다.
+
+### 6. 검색어 취소 훅
+
+```javascript
+function useSearch(query) {
+  const [results, setResults] = useState([]);
+  useEffect(() => {
+    if (!query) return;
+    const controller = new AbortController();
+    fetch(`/search?q=${query}`, { signal: controller.signal })
+      .then(r => r.json())
+      .then(setResults)
+      .catch(e => { if (e.name !== 'AbortError') console.error(e); });
+    return () => controller.abort();
+  }, [query]);
+  return results;
+}
+```
+
+* * *
+
+## 체크리스트
+
+*    REST의 리소스 중심 설계와 주요 메서드 매핑을 안다
+*    HATEOAS가 실무에서 잘 안 쓰이는 이유를 안다
+*    오버페칭/언더페칭 문제를 안다
+*    GraphQL의 쿼리/응답 구조를 그릴 수 있다
+*    GraphQL N+1 문제와 Dataloader 해결법을 안다
+*    WebSocket 핸드셰이크 (101 Switching Protocols)를 안다
+*    WebSocket과 SSE의 차이와 선택 기준을 안다
+*    Long Polling의 동작 원리를 안다
+*    `fetch`가 4xx/5xx를 reject하지 않는 점을 안다
+*    AbortController로 요청 취소를 구현할 수 있다
+*    Axios 인터셉터 패턴의 용도를 안다
+*    Exponential Backoff 재시도 전략을 구현할 수 있다
+
+* * *
+
+**이전**: [2-2. HTTP와 HTTPS](2단계-2-HTTP와-HTTPS) | **다음**: [2-4. 인증과 인가](2단계-4-인증과-인가)

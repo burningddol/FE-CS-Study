@@ -1,0 +1,604 @@
+
+> **학습 목표**
+> - React Fiber와 Reconciliation의 동작 원리를 이해한다
+> - Vue의 Reactivity System(Proxy 기반)과 Virtual DOM 업데이트 방식을 파악한다
+> - Svelte의 컴파일 타임 접근이 런타임 프레임워크와 어떻게 다른지 학습한다
+> - 프레임워크별 Trade-off를 이해해 올바른 선택을 할 수 있어야 한다
+
+* * *
+
+## 0. "프레임워크가 뭘 해주고 있나" — 초심자용
+
+### 0-1. 프레임워크가 없다면
+
+```js
+// 순수 JS로 카운터 만들기
+let count = 0;
+const btn = document.querySelector('#btn');
+const display = document.querySelector('#count');
+btn.addEventListener('click', () => {
+  count++;
+  display.textContent = count;
+});
+```
+
+이 정도는 쉽다. 하지만 화면에 **50개의 컴포넌트가 서로 연결**되면:
+
+- 상태가 바뀔 때마다 DOM의 어떤 부분을 업데이트할지 **수동 추적**
+- 이벤트 리스너 생성/삭제를 **직접 관리**
+- 상태 간 의존성 때문에 업데이트 순서 **직접 계산**
+
+결과: 버그 폭탄. React/Vue/Svelte는 이 모든 것을 **자동화**한다.
+
+### 0-2. 프레임워크가 공통으로 해결하는 문제
+
+1. **상태 ↔ UI 동기화**: 상태가 바뀌면 UI가 알아서 바뀌게
+2. **최소 업데이트**: 바뀐 부분만 DOM에 반영 (성능)
+3. **이벤트·생명주기 관리**: 컴포넌트 언마운트 시 자원 정리
+4. **컴포지션**: 작은 컴포넌트를 조합해서 큰 UI
+
+"어떻게 해결하느냐" 가 프레임워크마다 다르다 — 이 장의 주제.
+
+### 0-3. 세 가지 접근 방식 요약
+
+| 프레임워크 | 핵심 전략 | 한 줄 설명 |
+|---|---|---|
+| **React** | Virtual DOM + Fiber | 변경 시 가상 트리 비교 후 최소 DOM 패치 |
+| **Vue** | Proxy 기반 Reactivity | 어떤 데이터가 어디서 쓰이는지 자동 추적 |
+| **Svelte** | 컴파일 타임 변환 | 코드를 미리 DOM 조작 코드로 컴파일, 런타임 최소 |
+
+**같은 문제를 완전히 다른 방식으로 풀고 있다.** 이해하고 나면 "어떤 상황에 어떤 프레임워크가 유리한가"가 명확해진다.
+
+### 0-4. 왜 내부를 알아야 하나
+
+"그냥 잘 쓰면 되는 거 아냐?" — 실무에서 막히는 순간:
+
+- **"이 훅이 왜 무한 루프에 빠지지?"** — Reconciliation 이해 없이는 진단 불가
+- **"리렌더가 왜 자꾸 일어나지?"** — Fiber가 어떻게 비교하는지 알아야
+- **"useMemo / useCallback 언제 쓰지?"** — 내부 메커니즘 모르면 감으로 남발
+- **"Vue의 ref vs reactive 차이?"** — Proxy 한계를 이해해야
+- 면접에서 "React가 어떻게 빨라지는가?" 는 **단골 질문**
+
+### 0-5. 선행 장 연결
+
+| 장 | 가져오는 것 |
+|---|---|
+| [1-6](1단계-6-연결-리스트-트리-그래프.md) | Virtual DOM = 트리 자료구조 |
+| [5-1](5단계-1-JavaScript-엔진-V8.md) | Hidden Class — 왜 객체 shape 일관성이 중요한가 |
+| [5-2](5단계-2-실행-컨텍스트-스코프-클로저.md) | 클로저 — `useState`의 실체 |
+| [5-3](5단계-3-컴파일러와-AST.md) | Svelte / Solid가 컴파일 타임에 하는 일 |
+
+이 장은 지금까지 배운 것들이 **프론트엔드 프레임워크 안에서 어떻게 쓰이고 있는지** 종합 적용하는 챕터.
+
+---
+
+## 1. 왜 내부 동작을 알아야 하나
+
+- **성능 문제는 추상화의 빈틈에서 생긴다**. `useMemo` 남용, `watchEffect` 무한 루프, 불필요한 리렌더 — 프레임워크의 메커니즘을 모르면 진단 불가.
+- **API 디자인 의도**를 이해해야 "왜 이 훅은 이렇게 동작하지?"에 답할 수 있다.
+- 면접/온보딩에서 **"React는 어떻게 렌더링을 최적화하는가?"**는 단골 질문이다.
+
+---
+
+## 2. React — Fiber Architecture
+
+### 2-1. 이전 (Stack Reconciler) vs Fiber
+
+**Stack Reconciler (≤ React 15)**: 재귀 호출로 컴포넌트 트리 순회. **한 번 시작하면 중단 불가**. 큰 트리 업데이트 = 메인 스레드 100ms+ 블로킹.
+
+**Fiber (16+)**: 작업을 **작은 단위(Fiber)로 쪼개서** 순회. 각 단위마다 **양보(yield) 가능** → 브라우저가 유저 입력·애니메이션 처리 가능.
+
+### 2-2. Fiber 노드의 정체
+
+Fiber는 **각 컴포넌트/DOM 요소에 대응하는 JS 객체**다.
+
+```js
+// 개념적 구조 (실제 더 많은 필드 있음)
+{
+  type: Button,          // 함수/클래스/"div"
+  key: null,
+  stateNode: {},         // 인스턴스 또는 DOM 노드
+  return: parentFiber,   // 부모
+  child: firstChildFiber,
+  sibling: nextSiblingFiber,
+  memoizedProps: {},
+  memoizedState: {},
+  pendingProps: {},
+  flags: PlacementMask,  // 수행할 작업 (Placement, Update, Deletion)
+  alternate: workInProgressFiber,
+}
+```
+
+**Double Buffering**: `current` 트리와 `workInProgress` 트리 두 개 유지. 새 트리 빌드가 끝나면 한 번에 교체.
+
+### 2-3. 렌더링 두 단계
+
+React 렌더링은 두 페이즈로 나뉜다.
+
+1. **Render Phase (중단 가능)**
+   - 컴포넌트 함수 호출, 새 Fiber 트리 생성, diff 계산
+   - **순수해야 함**: 사이드 이펙트 금지, 같은 입력에 같은 출력
+   - **여러 번 호출될 수 있음** (중단되고 재시작)
+
+2. **Commit Phase (동기, 중단 불가)**
+   - DOM에 실제 변경 적용 (`appendChild`, `removeChild` 등)
+   - `useLayoutEffect` → `useEffect` 순으로 실행
+   - 매우 빨라야 함
+
+⚠️ **Render Phase에서 `setState` 연쇄 호출 = 무한 루프** (예: 조건 없는 `setState`).
+
+### 2-4. Reconciliation (diff 알고리즘)
+
+두 트리 비교 최적화를 위한 휴리스틱:
+
+1. **타입이 다르면 서브트리 전체 교체**
+   ```jsx
+   {/* 이전 */}<div><Counter /></div>
+   {/* 이후 */}<span><Counter /></span>
+   // div와 span 타입 다름 → Counter 언마운트 후 재생성 (state 초기화)
+   ```
+
+2. **같은 타입이면 props만 업데이트**
+   ```jsx
+   {/* 이전 */}<div className="a" />
+   {/* 이후 */}<div className="b" />
+   // className만 바뀜
+   ```
+
+3. **리스트는 `key`로 추적**
+   ```jsx
+   items.map(item => <Row key={item.id} {...item} />)
+   // key 없으면 index 기반 → 삽입/삭제 시 잘못된 매칭으로 불필요한 리렌더
+   ```
+
+⚠️ **`key={index}` 금지** — 순서 변경/삽입/삭제 시 React가 "같은 것"으로 오해.
+
+### 2-5. Concurrent Rendering (React 18+)
+
+Fiber 구조 위에 본격적으로 올라간 기능들.
+
+- **`startTransition`**: 급하지 않은 업데이트를 양보 가능하게 마킹
+- **`useDeferredValue`**: 파생 값 지연
+- **`<Suspense>`**: 비동기 경계 선언적 처리
+- **Automatic Batching**: Promise/timeout 안의 `setState`도 자동 배치
+
+```jsx
+// React 17
+setTimeout(() => {
+  setA(1); // 리렌더 1
+  setB(2); // 리렌더 2
+}, 0);
+
+// React 18 — Automatic Batching
+setTimeout(() => {
+  setA(1);
+  setB(2); // 리렌더 1회만
+}, 0);
+```
+
+### 2-6. 리렌더가 일어나는 조건
+
+- 컴포넌트의 `state` 변경
+- `props` 변경 (부모가 리렌더되면 자식도 기본적으로)
+- `useContext` 구독 값 변경
+- `useSyncExternalStore` 외부 스토어 변경
+
+**리렌더 ≠ DOM 변경**. Reconciliation 결과 diff가 없으면 DOM은 건드리지 않는다.
+
+### 2-7. Hooks는 어떻게 동작하나
+
+각 훅 호출은 **Fiber 노드의 `memoizedState` 연결 리스트**에 저장된다.
+
+```jsx
+function Counter() {
+  const [a, setA] = useState(0); // memoizedState[0]
+  const [b, setB] = useState(0); // memoizedState[1]
+  useEffect(() => { /* ... */ }); // memoizedState[2]
+}
+```
+
+**호출 순서가 index 역할**을 한다. 그래서 **조건문 안에서 훅 호출 금지**.
+
+```jsx
+// ❌ 조건 분기에 따라 인덱스가 달라져 state가 엉킴
+if (x) {
+  const [a] = useState(0);
+}
+const [b] = useState(0);
+```
+
+---
+
+## 3. Vue — Reactivity System
+
+### 3-1. Vue 2 → Vue 3 전환
+
+| 항목 | Vue 2 | Vue 3 |
+|------|-------|-------|
+| Reactivity | `Object.defineProperty` | **`Proxy`** |
+| 배열 인덱스 추적 | ❌ (mutate 메서드만) | ✅ |
+| 속성 추가 | `Vue.set` 필요 | 자연스러움 |
+| 타겟 브라우저 | IE11까지 | ES2015+ |
+
+### 3-2. Proxy 기반 반응성
+
+```js
+function reactive(target) {
+  return new Proxy(target, {
+    get(obj, key) {
+      track(obj, key); // 현재 effect가 이 속성에 의존한다고 기록
+      return Reflect.get(obj, key);
+    },
+    set(obj, key, value) {
+      const result = Reflect.set(obj, key, value);
+      trigger(obj, key); // 이 속성 의존하는 effect 모두 재실행
+      return result;
+    },
+  });
+}
+
+function effect(fn) {
+  activeEffect = fn;
+  fn();
+  activeEffect = null;
+}
+```
+
+### 3-3. `ref` vs `reactive`
+
+```js
+import { ref, reactive } from 'vue';
+
+const count = ref(0);      // 원시 값 래핑 (.value 접근)
+const state = reactive({   // 객체 전체 반응형
+  user: { name: 'Alice' },
+});
+
+count.value++;             // 템플릿 안에서는 .value 자동 언래핑
+state.user.name = 'Bob';
+```
+
+⚠️ **Destructuring은 반응성 끊어짐**.
+```js
+const { name } = state.user; // 그냥 string 복사, 반응성 없음
+// 해결: toRefs
+const { name } = toRefs(state.user); // name은 Ref
+```
+
+### 3-4. 의존성 추적 사이클
+
+```
+렌더 함수 실행 → Proxy get 트랩 발동 → track(객체, 키) → 의존성 맵에 기록
+데이터 변경 → Proxy set 트랩 발동 → trigger(객체, 키) → 의존하는 effect 재실행 → 리렌더
+```
+
+### 3-5. Virtual DOM + Compile-time Optimization
+
+Vue 3는 React처럼 VDOM을 쓰지만, **컴파일러가 템플릿을 분석해 정적 부분을 표시**한다.
+
+```vue
+<template>
+  <div class="static">
+    <p>정적 텍스트</p>
+    <p>{{ dynamic }}</p>
+  </div>
+</template>
+```
+
+컴파일 결과에 **PatchFlag**가 붙어, diff 시 **동적 노드만 검사**. 정적 노드는 hoisting.
+
+```js
+// 컴파일된 렌더 함수 (개념적)
+_createVNode("div", { class: "static" }, [
+  _hoisted_1, // <p>정적 텍스트</p> 한 번만 생성
+  _createVNode("p", null, _ctx.dynamic, 1 /* TEXT */) // PatchFlag: 텍스트만
+]);
+```
+
+→ Vue의 VDOM diff는 React보다 빠르다(정적 분석 덕).
+
+### 3-6. `watch` vs `computed` vs `watchEffect`
+
+```js
+// computed: 파생 상태 (캐싱, lazy)
+const fullName = computed(() => `${user.first} ${user.last}`);
+
+// watch: 특정 소스 감시 (이전 값 접근 가능)
+watch(() => user.id, (newId, oldId) => { /* ... */ });
+
+// watchEffect: 의존성 자동 추적 (초기 즉시 실행)
+watchEffect(() => {
+  console.log(user.name); // name을 자동 추적
+});
+```
+
+---
+
+## 4. Svelte — Compile-time Reactivity
+
+### 4-1. 다른 패러다임: No Virtual DOM
+
+Svelte는 **컴파일러가 컴포넌트를 최적화된 Imperative JS로 변환**한다. 런타임 VDOM diff 없음.
+
+```svelte
+<!-- 컴포넌트 -->
+<script>
+  let count = 0;
+</script>
+<button on:click={() => count++}>{count}</button>
+```
+
+**컴파일 결과 (개념적)**:
+
+```js
+function create_fragment(ctx) {
+  let button;
+  let t;
+
+  return {
+    c() {
+      button = element("button");
+      t = text(ctx[0]); // count
+      listen(button, "click", ctx[1]);
+      append(button, t);
+    },
+    p(ctx, dirty) {
+      if (dirty & /*count*/ 1) {
+        set_data(t, ctx[0]);
+      }
+    },
+    d() { detach(button); }
+  };
+}
+```
+
+→ **count가 바뀌면 해당 텍스트 노드만 직접 업데이트**. diff 없음.
+
+### 4-2. `$` 반응성 선언 (Svelte 4)
+
+```svelte
+<script>
+  let count = 0;
+  $: doubled = count * 2;           // count 바뀔 때마다 재계산
+  $: if (count > 10) alert('!');    // 부수효과도 가능
+</script>
+```
+
+### 4-3. Svelte 5 Runes
+
+Svelte 5는 `$`의 암묵성을 **명시적 Rune 함수**로 대체.
+
+```svelte
+<script>
+  let count = $state(0);
+  let doubled = $derived(count * 2);
+  $effect(() => console.log(count));
+</script>
+```
+
+내부적으로는 여전히 **컴파일 타임에 의존성 분석** → 런타임 오버헤드 최소.
+
+### 4-4. 번들 크기
+
+- React + ReactDOM: ~45KB gzip
+- Vue 3 (런타임 빌드): ~34KB
+- Svelte: **컴파일러만 빌드 타임에, 런타임은 ~3-10KB** (앱 크기에 따라 다름)
+
+작은 위젯이나 임베드에 Svelte가 유리한 이유.
+
+---
+
+## 5. Solid — Fine-grained Reactivity
+
+Svelte처럼 컴파일하되, **Signal** 기반 반응성 + JSX 사용.
+
+```jsx
+import { createSignal } from 'solid-js';
+
+function Counter() {
+  const [count, setCount] = createSignal(0);
+  return <button onClick={() => setCount(c => c + 1)}>{count()}</button>;
+}
+```
+
+- `count()`는 **함수 호출**. 값 읽는 시점에 구독 등록.
+- **컴포넌트 함수는 단 한 번만 실행**된다. 이후 값이 바뀔 때 **해당 DOM 노드만 업데이트**.
+- React처럼 전체 컴포넌트 리렌더 없음 → 성능 매우 좋음.
+
+### Signal 패턴의 확산
+
+- **Preact Signals**
+- **Angular Signals** (16+)
+- **Vue `ref`** (사실상 Signal과 유사)
+
+---
+
+## 6. 프레임워크 비교
+
+| 항목 | React | Vue 3 | Svelte | Solid |
+|------|-------|-------|--------|-------|
+| 렌더링 전략 | VDOM + Fiber | VDOM + PatchFlag | **컴파일 타임** | **컴파일 타임 + Signal** |
+| 반응성 단위 | 컴포넌트 | 컴포넌트 | 변수 | 표현식(Fine-grained) |
+| 리렌더 범위 | 컴포넌트 전체 | 컴포넌트 전체 (정적 hoisting) | 변경 노드만 | 변경 표현식만 |
+| 런타임 크기 | 중 (~45KB) | 소~중 (~34KB) | 매우 작음 (~3KB) | 작음 (~7KB) |
+| 생태계 | 최대 | 큼 | 성장 중 | 작음 |
+| 러닝 커브 | 중 | 낮 | 낮 | 중 |
+
+---
+
+## 7. 상태 관리 라이브러리 비교 (React 기준)
+
+| 도구 | 패러다임 | 강점 | 약점 |
+|------|---------|------|------|
+| **Redux (+ Toolkit)** | Flux, 단방향 | 큰 앱, DevTools | 보일러플레이트 |
+| **Zustand** | Hook, Immutable | 간결, Context 비용 없음 | 규모 커지면 조직화 필요 |
+| **Jotai** | Atomic, Bottom-up | 세밀한 구독 | 많은 atom 관리 |
+| **Recoil** | Atomic (Meta) | React 통합 | 업데이트 느림 |
+| **Valtio** | Mutable Proxy | 직관적 | immutable 고집 필요할 때 |
+| **React Query / TanStack Query** | 서버 상태 캐시 | fetch/cache/invalidation | 클라 상태 아님 |
+
+**클라이언트 상태와 서버 상태를 분리하라**. 서버 상태는 React Query 같은 도구에, 클라이언트 상태는 Zustand/Jotai 같은 도구에.
+
+---
+
+## 8. 실무 성능 디버깅 가이드
+
+### 8-1. React Profiler
+
+```jsx
+import { Profiler } from 'react';
+
+<Profiler id="Nav" onRender={(id, phase, actualDuration) => {
+  console.log(id, phase, actualDuration);
+}}>
+  <Nav />
+</Profiler>
+```
+
+**React DevTools Profiler** — 어떤 컴포넌트가 왜 리렌더됐는지 기록/재생.
+
+### 8-2. 리렌더 원인 5가지
+
+1. **부모 리렌더** → `React.memo`로 차단 가능
+2. **Context 값 변경** → Context 쪼개기, selector 패턴
+3. **새 객체/배열 리터럴 props** → `useMemo`, `useCallback`
+4. **불안정한 key** → 안정된 id 사용
+5. **inline 함수** → `useCallback`
+
+### 8-3. 무한 루프 진단
+
+```jsx
+// 전형적인 함정: 객체 리터럴이 매 렌더마다 새 참조
+useEffect(() => {
+  fetch('/api', { headers: { Auth: token } });
+}, [{ Auth: token }]); // ❌ 매 렌더 새 객체 → 무한 루프
+
+// ✅
+useEffect(() => {
+  fetch('/api', { headers: { Auth: token } });
+}, [token]);
+```
+
+---
+
+## 9. 실무 체크리스트
+
+- [ ] 리스트 렌더에 안정된 `key`를 쓰는가 (index 아님)
+- [ ] Context는 의미 단위로 쪼개져 있는가 (큰 Context 하나에 모든 걸 담지 않음)
+- [ ] 서버 상태와 클라이언트 상태를 분리했는가 (React Query 등)
+- [ ] `useMemo`/`useCallback`을 **프로파일링 후** 최소 사용했는가
+- [ ] `Vue` Destructuring에서 반응성을 잃지 않는가 (`toRefs`)
+- [ ] Svelte 앱에서 `$:` 반응성 문의 의존성이 명확한가
+- [ ] Automatic Batching을 이해하고 `flushSync`가 언제 필요한지 아는가
+
+---
+
+## 10. 연습 문제
+
+**Q1.** React Fiber 도입으로 해결된 기존 Stack Reconciler의 문제는 무엇인가?
+
+<details>
+<summary>정답</summary>
+
+Stack Reconciler는 컴포넌트 트리를 **재귀 함수 호출로 동기 순회**했기 때문에, 한 번 렌더링이 시작되면 완료까지 메인 스레드를 점유했다. 큰 트리에서 100ms 이상 블로킹이 흔해 유저 입력·애니메이션이 버벅였다.
+
+Fiber는 순회를 **중단 가능한 단위(Fiber 노드)로 쪼개고**, 각 단위마다 브라우저에 양보 가능하게 만들어 Concurrent Rendering의 기반을 제공한다.
+
+</details>
+
+**Q2.** React 렌더링의 Render Phase와 Commit Phase를 구분하고, 각 단계에서 주의할 점을 설명하라.
+
+<details>
+<summary>정답</summary>
+
+- **Render Phase**: 컴포넌트 함수 호출, Fiber 트리 빌드, diff 계산. **중단·재시작될 수 있음.** 따라서 **순수 함수**여야 하고, 외부 변이·DOM 접근·타이머 설정 금지.
+- **Commit Phase**: 실제 DOM 변이, `useLayoutEffect` 동기 실행 후 `useEffect` 비동기 실행. **동기 + 중단 불가**. 여기서 느려지면 프레임이 떨어짐 → 짧게 유지.
+
+</details>
+
+**Q3.** Vue 3가 `Object.defineProperty`를 버리고 `Proxy`로 전환한 이유를 2가지 이상 설명하라.
+
+<details>
+<summary>정답</summary>
+
+1. **새 속성 추가/삭제 감지**: `defineProperty`는 이미 존재하는 속성만 가로챌 수 있어 `Vue.set`/`$delete` 같은 우회가 필요했다. `Proxy`는 get/set/has/deleteProperty 등 모든 연산을 트랩한다.
+2. **배열 인덱스/length 감지**: `defineProperty`로는 `arr[i] = x`, `arr.length = 0`을 감지하기 어려워 mutate 메서드(push/pop 등)만 패치했다. `Proxy`는 자연스럽게 처리.
+3. **성능**: 초기화 시 모든 속성에 getter/setter를 정의할 필요가 없어 큰 객체 초기화가 빠름.
+
+</details>
+
+**Q4.** Svelte가 "Virtual DOM이 없다"고 말하는 의미를 설명하라.
+
+<details>
+<summary>정답</summary>
+
+Svelte는 빌드 시 **컴포넌트를 직접 DOM을 조작하는 최적화된 JS로 컴파일**한다. 런타임에 VDOM 트리를 만들고 diff하는 과정이 없고, **변경된 변수와 연결된 DOM 노드를 직접 업데이트**한다. 결과적으로 런타임 오버헤드가 적고 번들 크기가 작다. 단, 복잡한 동적 트리 조작(예: 런타임 결정 컴포넌트)이 제한적이고, 컴파일러가 정확히 의존성을 분석할 수 있어야 한다.
+
+</details>
+
+**Q5.** 다음 코드의 문제와 해결책을 제시하라.
+```jsx
+function Parent() {
+  const [count, setCount] = useState(0);
+  return <Child config={{ theme: 'dark' }} onClick={() => setCount(c => c + 1)} />;
+}
+const Child = React.memo(({ config, onClick }) => { /* 무거움 */ });
+```
+
+<details>
+<summary>정답</summary>
+
+`config`가 **매 렌더마다 새 객체 리터럴**로 생성되고, `onClick`도 **매 렌더 새 함수**라 `React.memo`의 shallow compare가 항상 false → 메모 효과가 사라진다.
+
+해결:
+```jsx
+function Parent() {
+  const [count, setCount] = useState(0);
+  const config = useMemo(() => ({ theme: 'dark' }), []);
+  const handleClick = useCallback(() => setCount(c => c + 1), []);
+  return <Child config={config} onClick={handleClick} />;
+}
+```
+또는 `config`가 진짜 정적이라면 컴포넌트 밖으로 상수로 꺼내는 편이 더 깔끔하다.
+
+</details>
+
+**Q6.** React에서 `key={index}`가 위험한 구체적 시나리오를 들어라.
+
+<details>
+<summary>정답</summary>
+
+리스트 **맨 앞에 아이템을 삽입**할 때. 새 배열 `[new, A, B, C]`에서:
+- index 기반 key: 0→new, 1→A, 2→B, 3→C. React는 "0번 자리 요소가 A에서 new로 바뀌고, 기존 C 뒤에 하나 추가됐다"로 오해 → 모든 요소가 **내부 state 유지된 채 props만 바뀐 것처럼 처리**.
+- 만약 각 Row에 로컬 state(예: 인라인 편집 중)가 있으면 **다른 행의 편집 내용이 엉뚱한 행으로 이동**한다.
+
+해결: 안정된 고유 id(`item.id`)를 key로 사용.
+
+</details>
+
+**Q7.** Solid.js가 React보다 기본 성능이 좋은 이유를 Signal 개념으로 설명하라.
+
+<details>
+<summary>정답</summary>
+
+React는 **컴포넌트 단위로 리렌더**한다. state가 바뀌면 해당 컴포넌트 전체가 다시 실행되고, VDOM diff로 실제 변경만 DOM에 반영한다.
+
+Solid는 **Signal을 읽는 표현식 단위로 구독**을 기록한다. 컴포넌트 함수는 초기화 시 **단 한 번만 실행**되고, Signal이 바뀌면 **그 Signal을 실제로 사용하는 DOM 노드나 속성만 직접 업데이트**된다. 컴포넌트 리렌더·VDOM diff 자체가 없어 업데이트 경로가 훨씬 짧고 예측 가능하다. 이를 **Fine-grained Reactivity**라 한다.
+
+</details>
+
+---
+
+## 11. 정리
+
+- **React Fiber**는 중단 가능한 단위 순회로 Concurrent Rendering을 가능케 했다.
+- **Reconciliation**은 타입·key 기반의 휴리스틱 diff다.
+- **Vue 3**는 `Proxy` 기반 Reactivity로 깔끔하고, 컴파일러의 정적 분석으로 VDOM diff가 빠르다.
+- **Svelte**는 컴파일 타임에 반응성을 해결해 런타임이 거의 없다.
+- **Solid**는 Signal로 Fine-grained 업데이트를 제공한다.
+- 프레임워크는 "좋은/나쁜"이 아니라 **앱 특성에 맞는 Trade-off**를 선택하는 문제다.
+- 성능 문제는 추상화의 빈틈에서 생긴다 — 내부 동작을 알면 근본 해결이 가능하다.
+
+---
+
+[← 5-6. 웹 성능 최적화](5단계-6-웹-성능-최적화) | [5-8. 기타 꼭 알아야 할 것들 →](5단계-8-기타-꼭-알아야-할-것들)

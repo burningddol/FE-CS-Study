@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><title>Buttons</title>
+<link rel="stylesheet" href="../colors_and_type.css"><link rel="stylesheet" href="../tokens.css">
+<style>body{margin:0;padding:24px;background:var(--bg);font-family:var(--font-sans);display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+.btn{display:inline-flex;align-items:center;gap:6px;font-family:var(--font-sans);font-weight:600;font-size:14px;border:none;border-radius:10px;padding:10px 16px;cursor:pointer;transition:all .12s cubic-bezier(0.2,0.8,0.2,1)}
+.p{background:#4F46E5;color:#fff}
+.p:hover{background:#4338CA}
+.s{background:#fff;color:#27272A;border:1px solid #E8E8EC}
+.s:hover{background:#FAFAFA}
+.g{background:#F4F4F5;color:#27272A}
+.ghost{background:transparent;color:#4F46E5}
+.ghost:hover{background:#EEF0FF}
+.dng{background:#EF4444;color:#fff}
+.sm{padding:6px 10px;font-size:12px;border-radius:8px}
+.lg{padding:14px 22px;font-size:16px;border-radius:12px}
+.ic{width:16px;height:16px;stroke-width:2;stroke:currentColor;fill:none;stroke-linecap:round;stroke-linejoin:round}</style></head><body>
+<button class="btn p"><svg class="ic" viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"/></svg>강의 시작하기</button>
+<button class="btn s">강의 목록</button>
+<button class="btn ghost">더 보기 →</button>
+<button class="btn g">저장</button>
+<button class="btn dng">삭제</button>
+<button class="btn p lg">수강 신청</button>
+<button class="btn s sm">필터</button>
+<button class="btn p" disabled style="opacity:.45;cursor:not-allowed">비활성</button>
+</body></html>

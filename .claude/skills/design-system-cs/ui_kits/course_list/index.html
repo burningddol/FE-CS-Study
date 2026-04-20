@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>강의 목록 · JUNSEOK CS study</title>
+  <link rel="stylesheet" href="styles.css"/>
+</head>
+<body data-screen-label="Course List">
+  <div id="root"></div>
+
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+  <script type="text/babel" src="Nav.jsx"></script>
+  <script type="text/babel" src="HeroBanner.jsx"></script>
+  <script type="text/babel" src="StageFilter.jsx"></script>
+  <script type="text/babel" src="CourseCard.jsx"></script>
+  <script type="text/babel" src="Footer.jsx"></script>
+
+  <script type="text/babel">
+    const CHAPTERS = [
+      { id:'1-1', stage:'1', stageLabel:'01 · 자료구조', num:'1-1', title:'수 표현과 비트 연산', sub:'2진수, IEEE 754, 비트마스크 실전까지.', duration:'32분', lessons:8, progress:100, status:'done' },
+      { id:'1-2', stage:'1', stageLabel:'01 · 자료구조', num:'1-2', title:'이산수학 핵심', sub:'명제 논리, 집합, 순열·조합, 귀납법.', duration:'45분', lessons:10, progress:100, status:'done' },
+      { id:'1-3', stage:'1', stageLabel:'01 · 자료구조', num:'1-3', title:'복잡도 분석', sub:'빅오 정의, 분할상환, JS 내부 복잡도.', duration:'38분', lessons:9, progress:78, status:'inprogress' },
+      { id:'1-4', stage:'1', stageLabel:'01 · 자료구조', num:'1-4', title:'배열·문자열·해시', sub:'연산 비용표와 Object vs Map vs Set.', duration:'52분', lessons:12, progress:0, status:'upcoming' },
+      { id:'2-1', stage:'2', stageLabel:'02 · 네트워크', num:'2-1', title:'네트워크 기초', sub:'OSI/TCP-IP, 3-way/4-way handshake, DNS.', duration:'41분', lessons:9, progress:45, status:'inprogress' },
+      { id:'2-2', stage:'2', stageLabel:'02 · 네트워크', num:'2-2', title:'HTTP와 HTTPS', sub:'요청/응답 구조부터 TLS 1.3 까지.', duration:'48분', lessons:12, progress:0, status:'upcoming' },
+      { id:'2-5', stage:'2', stageLabel:'02 · 네트워크', num:'2-5', title:'브라우저 렌더링 과정', sub:'Critical Rendering Path, Reflow/Repaint.', duration:'44분', lessons:11, progress:0, status:'upcoming' },
+      { id:'3-1', stage:'3', stageLabel:'03 · OS', num:'3-1', title:'프로세스와 스레드', sub:'PCB, IPC, Context Switching, Web Worker.', duration:'36분', lessons:9, progress:0, status:'upcoming' },
+      { id:'3-2', stage:'3', stageLabel:'03 · OS', num:'3-2', title:'동기·비동기와 I/O 모델', sub:'blocking/non-blocking/multiplexing, libuv.', duration:'42분', lessons:10, progress:0, status:'upcoming' },
+      { id:'4-1', stage:'4', stageLabel:'04 · DB', num:'4-1', title:'DB 기초와 선택 기준', sub:'RDB vs NoSQL, Document/KV/Column/Graph.', duration:'28분', lessons:7, progress:0, status:'upcoming' },
+      { id:'4-4', stage:'4', stageLabel:'04 · DB', num:'4-4', title:'인덱스', sub:'B-Tree, 인덱스 못 타는 경우, 선두 컬럼.', duration:'34분', lessons:8, progress:0, status:'upcoming' },
+      { id:'5-1', stage:'5', stageLabel:'05 · 심화 FE', num:'5-1', title:'JavaScript 엔진 (V8)', sub:'Parser/Ignition/TurboFan, 히든 클래스.', duration:'56분', lessons:13, progress:0, status:'upcoming' },
+      { id:'5-4', stage:'5', stageLabel:'05 · 심화 FE', num:'5-4', title:'모듈 시스템과 번들러', sub:'CJS vs ESM, Webpack, Vite, Tree Shaking.', duration:'47분', lessons:11, progress:0, status:'upcoming' },
+      { id:'6-1', stage:'6', stageLabel:'06 · SW공학', num:'6-1', title:'디자인 패턴', sub:'Observer, Singleton, Factory, Strategy 등.', duration:'62분', lessons:14, progress:0, status:'upcoming' },
+      { id:'6-2', stage:'6', stageLabel:'06 · SW공학', num:'6-2', title:'설계 원칙', sub:'SOLID, DRY, KISS, 응집도/결합도.', duration:'39분', lessons:9, progress:0, status:'upcoming' },
+    ];
+
+    function App() {
+      const [stage, setStage] = React.useState('all');
+      const [sort, setSort] = React.useState('order');
+      const [query, setQuery] = React.useState('');
+
+      let filtered = stage === 'all' ? CHAPTERS : CHAPTERS.filter(c => c.stage === stage);
+      if (query) filtered = filtered.filter(c => (c.title + c.sub).toLowerCase().includes(query.toLowerCase()));
+      if (sort === 'popular') filtered = [...filtered].sort((a, b) => (b.progress || 0) - (a.progress || 0));
+      if (sort === 'newest') filtered = [...filtered].reverse();
+
+      return (
+        <>
+          <Nav active="courses"/>
+          <HeroBanner name="준석"/>
+          <div className="filters-wrap">
+            <StageFilter active={stage} onChange={setStage}/>
+            <FilterBar sort={sort} onSort={setSort} query={query} onQuery={setQuery} count={filtered.length}/>
+          </div>
+          <div className="course-grid">
+            {filtered.map(c => <CourseCard key={c.id} chapter={c}/>)}
+          </div>
+          <Footer/>
+        </>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+  </script>
+</body>
+</html>

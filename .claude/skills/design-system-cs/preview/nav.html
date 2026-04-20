@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><title>Nav</title>
+<link rel="stylesheet" href="../colors_and_type.css"><link rel="stylesheet" href="../tokens.css">
+<style>body{margin:0;padding:0;background:#FAFAFA;font-family:var(--font-sans)}
+.nav{height:64px;background:rgba(255,255,255,.85);backdrop-filter:blur(12px);border-bottom:1px solid rgba(0,0,0,.06);display:flex;align-items:center;padding:0 24px;gap:24px}
+.brand{display:flex;align-items:center;gap:8px;font-weight:800;color:#18181B;font-size:15px;letter-spacing:-.015em}
+.brand svg{width:26px;height:26px}
+.links{display:flex;gap:4px;flex:1}
+.lk{padding:8px 12px;font-size:14px;font-weight:500;color:#52525B;border-radius:8px;cursor:pointer}
+.lk.active{background:#EEF0FF;color:#3730A3;font-weight:600}
+.right{display:flex;align-items:center;gap:12px}
+.search{background:#F4F4F5;border-radius:9999px;padding:7px 14px;display:flex;align-items:center;gap:6px;font-size:13px;color:#71717A}
+.search svg{width:14px;height:14px;stroke:currentColor;stroke-width:2;fill:none}
+.av{width:32px;height:32px;border-radius:50%;background:linear-gradient(135deg,#4F46E5,#8B5CF6);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:12px}</style></head><body>
+<nav class="nav">
+  <div class="brand">
+    <svg viewBox="0 0 40 40" fill="none"><path d="M20 3L35.5 14.3L29.6 32.5H10.4L4.5 14.3L20 3Z" stroke="#4F46E5" stroke-width="2.6" stroke-linejoin="round"/><circle cx="20" cy="20" r="4" fill="#4F46E5"/></svg>
+    JUNSEOK CS study
+  </div>
+  <div class="links">
+    <span class="lk active">강의</span>
+    <span class="lk">커리큘럼</span>
+    <span class="lk">진행률</span>
+    <span class="lk">리뷰</span>
+  </div>
+  <div class="right">
+    <div class="search"><svg viewBox="0 0 24 24" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.3-4.3"/></svg>검색</div>
+    <div class="av">JS</div>
+  </div>
+</nav>
+</body></html>

@@ -1,0 +1,576 @@
+
+> **목표**: **CommonJS, ESM, UMD, AMD** 모듈 시스템의 차이를 이해하고, Webpack/Vite/Rollup/esbuild/Turbopack의 내부 동작과 **Tree Shaking, Code Splitting, HMR** 을 설명할 수 있어야 한다.
+
+* * *
+
+## 0. "모듈"과 "번들러"가 뭔데 — 초심자용
+
+### 0-1. 옛날 웹: 스크립트 태그 열 개
+
+15년 전 웹사이트는 이랬다.
+
+```html
+<script src="jquery.js"></script>
+<script src="utils.js"></script>
+<script src="form.js"></script>
+<script src="main.js"></script>
+```
+
+- **순서 의존**: jQuery 먼저 안 들어오면 뒤가 다 에러
+- **전역 오염**: 모든 파일이 `window` 에 변수를 쏟아부음 → 이름 충돌
+- **의존성 관리 없음**: "이 파일이 저 파일을 필요로 한다" 는 걸 수동으로 기억
+
+파일 100개 규모면 관리 불능. **모듈 시스템**이 이를 해결한다.
+
+### 0-2. 모듈 = "파일 단위 캡슐"
+
+```js
+// math.js
+export function add(a, b) { return a + b; }
+
+// app.js
+import { add } from './math';
+```
+
+- `math.js` 안의 변수는 그 파일 안에서만 유효 (전역 오염 해결)
+- `import` 로 **필요한 것만** 꺼내옴 (의존성 명시)
+- JS 엔진이 **순서와 중복 로드**를 알아서 관리
+
+이게 **ES Modules (ESM)**. 2015년에 언어 표준으로 편입.
+
+### 0-3. "번들러"는 또 뭔가
+
+브라우저가 `import` 를 지원하긴 하지만, 파일 1000개짜리 앱을 그대로 보내면?
+
+- 요청 1000번 → 네트워크 느림
+- 의존성 해석을 브라우저에 떠넘김 → 시작 느림
+- 구형 브라우저는 `import` 자체를 모름
+
+그래서 배포 전에 모든 파일을 **한두 개로 합쳐서** 내보낸다. 이 "합치는 도구" 가 **번들러(Bundler)**.
+
+- **Webpack**: 오랫동안 표준. 설정 복잡
+- **Vite**: 개발 속도에 집중. esbuild + Rollup 하이브리드
+- **Rollup**: 라이브러리 번들링에 강함
+- **esbuild**: Go로 작성, 초고속
+- **Turbopack**: Next.js의 차세대 번들러, Rust
+
+### 0-4. 이 장에서 다루는 핵심 개념 (한 줄 정의)
+
+| 용어 | 한 줄 |
+|---|---|
+| CommonJS | Node.js 표준 모듈 (`require`) |
+| ESM | JS 언어 표준 모듈 (`import/export`) |
+| Tree Shaking | 안 쓰는 export 제거해서 번들 작게 |
+| Code Splitting | 한 번에 다 안 보내고 필요한 시점에 나눠 보냄 |
+| HMR | 개발 중 저장하면 페이지 리로드 없이 해당 모듈만 교체 |
+| Source Map | 번들된 코드와 원본 코드를 이어주는 매핑 |
+
+### 0-5. 이 장이 끝나면 설명할 수 있는 것
+
+- "Vite 가 왜 Webpack 보다 dev 서버가 빠른가?" — ESM native 활용
+- "Tree shaking이 왜 lodash-es 에서 되고 lodash 에서 안 되는가?" — CJS vs ESM
+- "`import ... from` 과 `require(...)` 을 같이 쓸 때 주의할 점"
+- `package.json` 의 `exports`, `main`, `module`, `types` 필드 의미
+- "한 라이브러리가 왜 ESM-only로 전환하면 난리가 나는가?" (dual package hazard)
+
+### 0-6. 선행 장 연결
+
+- [5-1](5단계-1-JavaScript-엔진-V8.md), [5-3](5단계-3-컴파일러와-AST.md)의 이해가 있으면 번들러 내부가 한결 쉬워진다.
+- [1-6](1단계-6-연결-리스트-트리-그래프.md) 의 **그래프**가 번들러의 **의존성 그래프**로 실전 등장.
+
+---
+
+## 1. 모듈 시스템의 역사
+
+| 시기 | 방식 | 이유 |
+|------|------|------|
+| ~2009 | `<script>` 여러 개 | 순서 의존, 전역 오염 |
+| 2009 | **CommonJS** (CJS) | Node.js의 `require` |
+| 2010 | **AMD** (RequireJS) | 브라우저용 비동기 |
+| ~2014 | **UMD** | CJS + AMD + 글로벌 호환 |
+| 2015 | **ESM** (ES Modules) | 언어 표준 `import/export` |
+
+---
+
+## 2. CommonJS (CJS)
+
+```js
+// math.js
+function add(a, b) { return a + b; }
+module.exports = { add };
+
+// app.js
+const { add } = require('./math');
+```
+
+### 특징
+
+- **동기 로드** — 파일 I/O 완료까지 블록
+- **캐시** — 같은 경로 두 번째 require는 캐시된 module.exports 반환
+- 실행 시점에 `require` 해석 → **동적 경로** 가능: `require(process.env.PLUGIN)`
+- **브라우저 직접 사용 불가** — 번들링 필요
+
+### module.exports vs exports
+
+```js
+// exports 는 module.exports의 참조
+exports.foo = 1;         // { foo: 1 }
+module.exports = { bar }; // exports 가리킴 끊김 → exports.foo 는 무시됨
+```
+
+헷갈리면 항상 `module.exports` 만 사용.
+
+---
+
+## 3. ES Modules (ESM)
+
+```js
+// math.js
+export function add(a, b) { return a + b; }
+export default class Calc {}
+
+// app.js
+import Calc, { add } from './math.js';
+import * as math from './math.js';
+```
+
+### 특징
+
+- **언어 표준** — 브라우저, Node, Deno 모두 네이티브 지원
+- **정적 구조** — import/export는 **파일 최상단, 조건 불가**
+- **비동기 로드** — Top-Level `await` 가능
+- **Live Bindings** — 변수 참조 유지
+
+### Live Bindings
+
+```js
+// counter.js
+export let count = 0;
+export function inc() { count++; }
+
+// app.js
+import { count, inc } from './counter.js';
+console.log(count); // 0
+inc();
+console.log(count); // 1
+```
+
+CJS의 값 복사와 다름.
+
+### 브라우저에서 사용
+
+```html
+<script type="module" src="app.js"></script>
+```
+
+- `type="module"` → 자동 strict mode, 지연 로딩
+- 파일 확장자 필수 (`./math.js`, `./math` 는 에러)
+
+### Node.js에서 ESM
+
+- `.mjs` 확장자 또는 `package.json` 의 `"type": "module"`
+- 혼용 시 CJS에서 ESM import는 `await import()` 만 가능
+
+---
+
+## 4. CJS ↔ ESM Interop
+
+### 흔한 에러
+
+```js
+// ESM 파일에서
+import fs from 'fs';          // OK (Node가 default interop 제공)
+import { readFile } from 'fs'; // OK
+import pkg from 'cjs-module';  // pkg === module.exports 전체
+```
+
+### Dual Package Hazard
+
+한 패키지가 CJS와 ESM 빌드를 모두 제공하면 **두 번 로드**될 수 있음 → 같은 클래스의 인스턴스가 `instanceof` 실패.
+
+```json
+// package.json
+{
+  "exports": {
+    ".": {
+      "import": "./dist/esm/index.js",
+      "require": "./dist/cjs/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  }
+}
+```
+
+`exports` 필드로 명확한 분기 제공.
+
+---
+
+## 5. 번들러는 왜 필요한가
+
+### 번들 없이 배포
+
+- HTTP/1.1 시절: 수백 모듈 = 수백 요청 → 느림
+- HTTP/2+: 요청 비용 줄지만 여전히 **Tree Shaking, Minify, 버전 해싱** 이 필요
+- 브라우저는 bare import 해석 못 함 (`import React from 'react'`)
+
+### 번들러의 역할
+
+1. 모든 모듈을 **의존성 그래프** 로 분석
+2. 번들(보통 여러 chunk)로 출력
+3. 코드 변환 (TS, JSX, CSS 모듈)
+4. 최적화 (Minify, Tree Shaking, Code Splitting)
+5. 해시 파일명, Source Map, Manifest
+
+---
+
+## 6. Webpack
+
+**가장 성숙한 번들러**. 무거운 대신 유연하다.
+
+### 핵심 개념
+
+- **Entry**: 시작점 (여러 개 가능)
+- **Output**: 번들 위치, 해시 규칙
+- **Loaders**: 파일별 변환 (`babel-loader`, `css-loader`)
+- **Plugins**: 번들 전체 단계 개입 (`HtmlWebpackPlugin`, `DefinePlugin`)
+- **Resolve**: 경로 별칭, 확장자 규칙
+
+### 최소 설정
+
+```js
+module.exports = {
+  entry: './src/index.js',
+  output: {
+    path: path.resolve(__dirname, 'dist'),
+    filename: '[name].[contenthash].js',
+  },
+  module: {
+    rules: [
+      { test: /\.tsx?$/, use: 'babel-loader' },
+      { test: /\.css$/, use: ['style-loader', 'css-loader'] },
+    ],
+  },
+};
+```
+
+### 단점
+
+- 설정 복잡
+- 빌드 속도 느림 (JS 런타임, 싱글 스레드 기본)
+
+---
+
+## 7. Vite
+
+2020~, Evan You (Vue 제작자).
+
+### 개발 모드 — ESM 네이티브
+
+```
+브라우저가 import 요청 → Vite dev server가 on-demand 변환 후 응답
+```
+
+- 번들링 **없음** (개발 중)
+- HMR 속도 일관, 코드 크기에 비례 안 함
+
+### 빌드 모드 — Rollup
+
+- 프로덕션은 Rollup 기반 번들
+- 트리 셰이킹 우수
+
+### esbuild 의존
+
+- CJS → ESM 사전 번들 (`optimizeDeps`)
+- TS/JSX 변환
+
+---
+
+## 8. Rollup
+
+**ESM 네이티브 번들러**. 라이브러리 작성에 최적.
+
+### 특징
+
+- 트리 셰이킹이 가장 정교
+- 작은 출력 번들
+- 앱보다 **라이브러리** 에 적합 (React, Vue 등 라이브러리가 사용)
+
+---
+
+## 9. esbuild
+
+Go로 작성. **압도적 속도**.
+
+- Webpack보다 10~100배 빠름
+- 코드 분할, 플러그인 시스템은 제한적
+- 주로 dev 트랜스파일 + 작은 프로젝트 빌드
+
+---
+
+## 10. Turbopack
+
+Next.js가 개발 중인 Rust 기반 번들러.
+
+- SWC 팀 주도
+- **증분 계산(Incremental computation)** 으로 변경분만 재빌드
+- 목표: Webpack의 후계, Vite와 경쟁
+
+---
+
+## 11. Tree Shaking
+
+**사용 안 하는 export 제거**.
+
+### 조건
+
+- ESM (CJS는 동적 분석 어려움)
+- **부수 효과 없는 코드** (pure)
+- `sideEffects: false` 힌트 (package.json)
+
+```json
+{
+  "name": "my-lib",
+  "sideEffects": false
+}
+```
+
+### 부수 효과란?
+
+```js
+// side effect 있음 — 임포트만 해도 실행
+import './polyfill.js';  // 전역 오염
+import './styles.css';   // CSS 주입
+
+// side effect 없음 — 사용 안 하면 제거 가능
+import { sum } from './math.js';
+```
+
+### 명시적 사이드 이펙트 파일 지정
+
+```json
+"sideEffects": ["./src/polyfill.js", "*.css"]
+```
+
+### /* @__PURE__ */ 힌트
+
+```js
+const result = /*#__PURE__*/ expensiveInit();
+// 사용 안 하면 제거됨
+```
+
+---
+
+## 12. Code Splitting
+
+**번들을 여러 chunk로 분리** → 필요한 것만 로드.
+
+### Entry 기반
+
+```js
+entry: {
+  main: './src/index.js',
+  admin: './src/admin.js',
+}
+```
+
+### 동적 import
+
+```js
+// 클릭 시점에 admin.js 로드
+button.onclick = async () => {
+  const { openAdmin } = await import('./admin.js');
+  openAdmin();
+};
+```
+
+- Webpack이 자동으로 별도 chunk 생성
+- React의 `React.lazy` 는 내부적으로 동적 import 사용
+
+### 라우트 기반
+
+```jsx
+const Dashboard = lazy(() => import('./Dashboard'));
+<Route path="/dashboard" element={<Dashboard />} />
+```
+
+### Common Chunk
+
+- 여러 entry가 공유하는 코드 → 공통 chunk로
+- `SplitChunksPlugin` 자동 처리
+
+---
+
+## 13. HMR (Hot Module Replacement)
+
+소스 변경 시 **페이지 새로고침 없이 모듈 교체**.
+
+### 동작
+
+```
+파일 변경 → 번들러가 해당 모듈 재빌드 → WebSocket으로 클라에 알림
+→ 클라가 새 모듈 fetch → accept 콜백 실행 → UI 갱신
+```
+
+### React Fast Refresh
+
+- 컴포넌트 상태 보존 + 핸들러 교체
+- 반영 불가 시 자동 폴백 → 전체 리로드
+
+### HMR API
+
+```js
+if (import.meta.hot) {
+  import.meta.hot.accept('./child.js', (newChild) => {
+    // child 재로드 처리
+  });
+}
+```
+
+---
+
+## 14. Bundle 분석
+
+### 도구
+
+- `webpack-bundle-analyzer` — 시각화
+- `source-map-explorer` — source map 기반
+- `npx vite-bundle-visualizer`
+
+### 흔한 문제
+
+- **중복 의존성** — 버전 불일치로 React 두 번 들어감
+- **moment/lodash 전체** — tree-shake 안 됨 → `lodash-es`, `date-fns`
+- **대형 이미지/폰트** 번들 포함 → 정적 에셋으로 분리
+- **polyfill 과다** — browserslist 좁히기
+
+---
+
+## 15. 환경 분리
+
+```js
+// .env
+VITE_API_URL=https://api.example.com
+
+// 코드
+const url = import.meta.env.VITE_API_URL;
+```
+
+- Webpack: `DefinePlugin` 로 빌드 시 치환
+- Vite: `import.meta.env` 접두사 기반
+- 민감 정보는 클라 번들에 **절대 넣지 않음** (Public 아무나 볼 수 있음)
+
+---
+
+## 16. ⚠️ 자주 하는 실수
+
+| 실수 | 결과 |
+|------|------|
+| CJS에서 ESM 패키지를 require | ERR_REQUIRE_ESM |
+| `sideEffects: false` + 실제로 부수효과 있음 | CSS 사라짐 |
+| `moment.js` 전체 import | 번들 300KB+ |
+| `import * as _` on lodash | 트리셰이킹 실패 |
+| `.env` 에 비밀 저장 | 빌드에 포함되어 노출 |
+| polyfill을 각 파일마다 import | 중복 폴리필 |
+
+---
+
+## 17. 연습 문제
+
+**Q1.** CJS와 ESM의 가장 본질적인 차이는?
+
+<details>
+<summary>정답</summary>
+
+- **CJS**: 실행 시점에 `require` 해석 → **동적**, 동기, 값 복사
+- **ESM**: 정적 분석 가능한 import/export → **트리 셰이킹 가능**, 비동기 로드, live binding
+
+정적 구조가 ESM의 힘.
+
+</details>
+
+**Q2.** Tree Shaking이 동작하려면 무엇이 필요한가?
+
+<details>
+<summary>정답</summary>
+
+1. **ESM** 모듈 사용 (CJS는 동적이라 어려움)
+2. **사이드 이펙트 없는 코드** 또는 `sideEffects` 필드로 명시
+3. 번들러에서 **production 모드** (minifier가 dead code 제거)
+4. 라이브러리가 **ESM 빌드** 를 제공 (`module` 또는 `exports.import`)
+
+</details>
+
+**Q3.** Vite가 개발 모드에서 빠른 이유는?
+
+<details>
+<summary>정답</summary>
+
+- 개발 중엔 **번들링 없음** — 브라우저의 ESM 네이티브를 활용
+- 파일 변경 시 해당 모듈만 재변환·응답 (esbuild)
+- HMR이 전체 그래프 재계산 없이 모듈 단위로 동작
+- 의존성은 사전 번들(`optimizeDeps`) 해서 큰 라이브러리 수백 파일 요청 방지
+
+결과: 프로젝트 크기에 상관없이 빠른 시작·HMR.
+
+</details>
+
+**Q4.** 동적 import를 라우트 분할에 쓰면 어떤 효과가 있는가?
+
+<details>
+<summary>정답</summary>
+
+각 라우트가 별도 chunk로 분리 → **초기 번들 크기 감소** → TTI 빨라짐. 사용자가 해당 페이지 진입 시에만 chunk를 다운로드. 대신 첫 방문에 약간의 로딩 스피너(prefetch로 완화 가능).
+
+</details>
+
+**Q5.** `"sideEffects": false` 를 잘못 설정하면 어떤 버그가 생기는가?
+
+<details>
+<summary>정답</summary>
+
+전역 초기화 코드(polyfill, CSS import, 글로벌 설정)가 **사용 안 된다고 판단되어 제거**된다. 대표 버그:
+- `import './polyfill.js'` 인데 polyfill 실행 안 됨
+- `import './styles.css'` 인데 스타일이 빠짐
+
+해결: `"sideEffects": ["*.css", "./src/polyfill.js"]` 로 예외 명시.
+
+</details>
+
+**Q6.** HMR이 React Fast Refresh와 다르게 그냥 JS 교체만 하면 어떤 문제가 있는가?
+
+<details>
+<summary>정답</summary>
+
+React 컴포넌트의 **내부 상태(useState, useRef)가 리셋**됨. 긴 폼을 작성하다가 저장 시 전부 사라짐. Fast Refresh는 컴포넌트 타입을 추적해 상태를 유지하면서 코드만 교체.
+
+</details>
+
+**Q7.** `moment.js` 가 번들러의 골칫덩이인 이유는?
+
+<details>
+<summary>정답</summary>
+
+1. **모놀리식** — 전체 라이브러리(+ 로케일) 가 항상 로드 (300KB+)
+2. 트리 셰이킹 **불친화** — CJS 구조, 사용 안 하는 로케일도 포함
+3. 변경 가능 객체로 불변성 위반
+
+대안: **date-fns** (함수형, 트리 셰이킹 친화), **dayjs** (moment API 호환, 2KB), **Temporal** (미래 표준).
+
+</details>
+
+---
+
+## 18. 체크리스트
+
+- [ ] CJS, ESM, UMD, AMD의 차이를 안다
+- [ ] ESM의 Live Binding 과 정적 구조를 설명할 수 있다
+- [ ] Webpack, Vite, Rollup, esbuild 의 용도를 구분한다
+- [ ] Tree Shaking 조건과 `sideEffects` 를 설정할 수 있다
+- [ ] Code Splitting을 entry/동적 import/라우트 기반으로 적용한다
+- [ ] HMR과 React Fast Refresh의 차이를 안다
+- [ ] 번들 분석으로 크기 문제를 진단한다
+- [ ] Dual Package Hazard를 이해하고 `exports` 필드를 설계한다
+
+---
+
+[← 5-3. 컴파일러와 AST](5단계-3-컴파일러와-AST) | [5-5. 렌더링 패턴 →](5단계-5-렌더링-패턴)

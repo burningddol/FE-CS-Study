@@ -1,0 +1,525 @@
+
+> **목표**: **Blocking/Non-Blocking, Sync/Async** 의 네 가지 조합을 구분하고, I/O Multiplexing(select/epoll)과 Node.js libuv의 동작을 이해한다. "JS가 왜 비동기 중심인가"를 OS 수준에서 설명할 수 있어야 한다.
+
+---
+
+## 0. "동기·비동기" 앞에 먼저 알아야 할 것 — 초심자용
+
+### 0-1. I/O가 뭔데 그렇게 느린가
+
+I/O = Input/Output. 프로그램이 CPU·메모리 바깥과 **데이터를 주고받는 모든 일**:
+
+- 파일 읽기/쓰기
+- 네트워크로 HTTP 요청
+- 데이터베이스 쿼리
+- 키보드 입력, 모니터 출력
+
+왜 느린가? CPU 한 번 연산이 **1 나노초** 라면, 디스크 한 번 읽기는 **10 밀리초** — **1,000만 배** 느리다. 네트워크는 더 심하다.
+
+**이 격차가 모든 이야기의 출발점이다.** "CPU가 놀지 않게 하려면 어떻게 할까?" = I/O 모델의 본질.
+
+### 0-2. 실사례: JS 한 줄이 3초 멈춘다
+
+```js
+const data = fs.readFileSync('big.json'); // 3초 걸림
+console.log("끝"); // 3초 뒤에 찍힘
+```
+
+이 3초 동안 브라우저였다면 **클릭도 안 먹고 화면도 안 움직인다**. 왜? 싱글 스레드여서. 그래서 모든 웹 API가 **비동기**로 설계됐다.
+
+```js
+fetch('/api/data').then(data => console.log("끝")); // 즉시 다음 줄
+```
+
+이 차이가 **동기 vs 비동기**의 실감 예시.
+
+### 0-3. 4개 단어 미리 정리
+
+뒤에 나오는 4가지 조합이 복잡하게 느껴지기 전에 단어 먼저 분리해서 본다.
+
+| 단어 | 관심사 | 한 줄 |
+|---|---|---|
+| **Blocking** | "내 코드가 멈추나?" | 호출 후 함수가 돌아올 때까지 나는 아무것도 못 함 |
+| **Non-Blocking** | "내 코드가 멈추나?" | 호출 후 즉시 다른 일 가능, 결과는 나중에 |
+| **Sync (동기)** | "완료를 누가 확인하나?" | 내가 직접 결과를 가져와야 함 |
+| **Async (비동기)** | "완료를 누가 확인하나?" | 완료되면 시스템이 콜백으로 알려줌 |
+
+이 둘은 **같은 축이 아니다** — 이것이 이 장의 가장 큰 포인트다.
+
+### 0-4. 왜 프론트 개발자에게 이 장이 중요한가
+
+- `async/await`, `Promise`, `fetch`가 내부적으로 **왜 이렇게 설계됐는지** 알 수 있다
+- Node.js 백엔드에서 **수천 개 연결을 어떻게 동시에 처리**하는지 (libuv, epoll)
+- "비동기 코드가 동기 코드보다 빠르다"는 **흔한 오해**를 걷어낸다 (비동기는 "효율적"이지 "빠르지" 않음)
+- 서버 사양 선택할 때 "I/O bound vs CPU bound" 판단 기준
+
+---
+
+## 1. 네 가지 축의 구분
+
+많은 사람이 동기=블로킹, 비동기=논블로킹으로 착각한다. 사실 **직교하는 두 축**이다.
+
+| | 관심 | 결정자 |
+|---|------|--------|
+| **Blocking vs Non-Blocking** | "호출이 즉시 리턴하는가?" | 호출측의 관점 |
+| **Sync vs Async** | "완료를 누가 알려주는가?" | 결과 전달 방식 |
+
+### 4가지 조합
+
+```
+                Blocking              Non-Blocking
+Sync      ┌─────────────────┐    ┌─────────────────┐
+          │ 호출이 끝날 때까지 │    │ 즉시 리턴, 나중에   │
+          │ 대기하고 결과도    │    │ 폴링으로 직접 확인   │
+          │ 직접 수거          │    │                  │
+          └─────────────────┘    └─────────────────┘
+          일반 read()              O_NONBLOCK read()
+                                  + poll/select
+
+Async     ┌─────────────────┐    ┌─────────────────┐
+          │ 블록되면서도      │    │ 즉시 리턴, 완료 시   │
+          │ 완료를 콜백/이벤트  │    │ 커널이 알림 (콜백,    │
+          │ 로 받음 (드문 조합) │    │ 이벤트, 시그널)      │
+          └─────────────────┘    └─────────────────┘
+                                  io_uring, IOCP,
+                                  AIO, Promise
+```
+
+### 예시로 이해
+
+1. **Sync + Blocking**: 마트 계산대 줄 서기 — 내 차례까지 아무것도 못 함
+2. **Sync + Non-Blocking**: 배달 시킨 뒤 5초마다 "다 됐어?" 전화 — 즉시 다른 일 가능, 확인은 내가
+3. **Async + Non-Blocking**: 배달 시키고 알림 기다림 — 즉시 다른 일, 완료 시 푸시로 알림
+4. **Async + Blocking**: 거의 없음. 일부 POSIX AIO 구현
+
+---
+
+## 2. 왜 I/O 모델이 중요한가
+
+- CPU는 나노초, 디스크 I/O는 밀리초, 네트워크는 수십~수백 ms
+- **CPU 연산:디스크 I/O ≈ 1:1,000,000**
+- I/O 대기 중 CPU를 놀리면 처리량이 폭락 → **I/O 동안 다른 일** 하는 게 핵심
+
+```
+블로킹 I/O:
+CPU  ▓▓░░░░░░░░░░░░░░░░░░▓▓       10%만 일함
+I/O  ░░▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓░░
+
+비동기 I/O:
+CPU  ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓       100% 활용
+I/O  ░░▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓░░
+```
+
+---
+
+## 3. I/O Multiplexing
+
+**하나의 스레드가 여러 FD를 동시에 감시**하는 기법.
+
+### select (1983)
+
+```c
+fd_set readfds;
+FD_ZERO(&readfds);
+FD_SET(fd1, &readfds);
+FD_SET(fd2, &readfds);
+select(maxfd + 1, &readfds, NULL, NULL, &timeout);
+```
+
+- FD 개수 **1024 제한** (FD_SETSIZE)
+- 매 호출마다 모든 FD를 커널에 복사 → O(N)
+- 이벤트 발생 시 **모든 FD를 훑어** 찾아야 함 → O(N)
+
+### poll (1997)
+
+- 1024 제한 제거
+- 그래도 O(N)
+
+### epoll (Linux 2.6, 2002)
+
+```c
+int epfd = epoll_create1(0);
+struct epoll_event ev = { .events = EPOLLIN, .data.fd = sock };
+epoll_ctl(epfd, EPOLL_CTL_ADD, sock, &ev);
+
+struct epoll_event events[64];
+int n = epoll_wait(epfd, events, 64, -1);
+for (int i = 0; i < n; i++) handle(events[i].data.fd);
+```
+
+- 커널이 이벤트 발생한 FD 목록만 반환 → **O(발생한 개수)**
+- 등록은 한 번, 대기만 반복
+- **엣지 트리거(ET)** / **레벨 트리거(LT)** 선택 가능
+
+### kqueue (BSD, macOS)
+
+- epoll과 유사, 더 일반화 (파일, 프로세스, 시그널도 감시)
+
+### IOCP (Windows)
+
+- Completion 기반 (진짜 비동기)
+- 요청을 등록하면 커널이 완료 후 큐에 알림
+
+---
+
+## 4. C10K 문제
+
+1999년 Dan Kegel이 제기 — **한 서버가 1만 개 동시 연결을 처리할 수 있는가?**
+
+### 문제 접근
+
+| 접근 | 한계 |
+|------|------|
+| 연결당 스레드 | 스레드 1만 개 → 메모리·컨텍스트 스위칭 폭발 |
+| 연결당 프로세스 | 더 나쁨 |
+| select/poll | O(N) 한계, FD 1024 |
+| epoll/kqueue | ✅ 해결 — O(이벤트 수) |
+
+### 파생
+
+- **C10M** (2013): 천만 동시 연결 — 커널 우회(DPDK), io_uring
+- Nginx, Redis, Node.js 모두 이벤트 루프 기반 논블로킹 멀티플렉싱
+
+---
+
+## 5. Node.js의 내부
+
+```
+┌──────────────────────────────────────┐
+│    JavaScript Code                    │
+└──────────────────────────────────────┘
+                 ↓
+┌──────────────────────────────────────┐
+│    V8 Engine                          │
+└──────────────────────────────────────┘
+                 ↓
+┌──────────────────────────────────────┐
+│    Node.js Bindings (C++)             │
+└──────────────────────────────────────┘
+                 ↓
+┌──────────────────────────────────────┐
+│    libuv                              │
+│   ┌────────────────────────────┐     │
+│   │   Event Loop                │     │
+│   └────────────────────────────┘     │
+│   ┌────────────────────────────┐     │
+│   │   Thread Pool (기본 4개)     │     │
+│   │   파일I/O, DNS, crypto      │     │
+│   └────────────────────────────┘     │
+│   ┌────────────────────────────┐     │
+│   │   OS Async I/O              │     │
+│   │   epoll / kqueue / IOCP    │     │
+│   └────────────────────────────┘     │
+└──────────────────────────────────────┘
+```
+
+### libuv 이벤트 루프 6단계
+
+```
+   ┌───────────────────────────┐
+┌─▶│      Timers                │ setTimeout, setInterval
+│  └────────────┬──────────────┘
+│  ┌────────────▼──────────────┐
+│  │   Pending Callbacks        │ 이전 루프의 I/O 콜백 잔여분
+│  └────────────┬──────────────┘
+│  ┌────────────▼──────────────┐
+│  │   Idle, Prepare            │ 내부용
+│  └────────────┬──────────────┘
+│  ┌────────────▼──────────────┐
+│  │   Poll                     │ 새 I/O 이벤트 수거 (여기서 주로 블록)
+│  └────────────┬──────────────┘
+│  ┌────────────▼──────────────┐
+│  │   Check                    │ setImmediate
+│  └────────────┬──────────────┘
+│  ┌────────────▼──────────────┐
+│  │   Close Callbacks          │ socket.on('close')
+└──┴───────────────────────────┘
+   각 단계 사이: process.nextTick → Promise Microtask
+```
+
+---
+
+## 6. 브라우저 vs Node.js 이벤트 루프 비교
+
+| | 브라우저 | Node.js |
+|---|----------|---------|
+| 구현 | HTML 스펙 | libuv |
+| Task 종류 | 하나의 Task 큐 | phase별 분리 (6단계) |
+| Microtask | Promise, MutationObserver | Promise, process.nextTick |
+| 렌더링 | 사이에 끼어듦 | 없음 |
+| 특수 | requestAnimationFrame | setImmediate, process.nextTick |
+
+---
+
+## 7. `setTimeout(fn, 0)` vs `setImmediate()`
+
+```js
+// Node.js
+setTimeout(() => console.log('timeout'), 0);
+setImmediate(() => console.log('immediate'));
+// 메인 스크립트 컨텍스트 → 순서 불확정!
+
+// 반면 I/O 콜백 내부에서는 항상 setImmediate 먼저
+fs.readFile(__filename, () => {
+  setTimeout(() => console.log('timeout'), 0);
+  setImmediate(() => console.log('immediate'));
+  // → immediate, timeout
+});
+```
+
+이유: I/O 콜백은 Poll phase → 바로 Check phase의 `setImmediate` 가 먼저 실행됨.
+
+---
+
+## 8. `process.nextTick` — 가장 먼저 실행되는 콜백
+
+```js
+console.log('start');
+process.nextTick(() => console.log('next'));
+Promise.resolve().then(() => console.log('promise'));
+console.log('end');
+
+// 출력: start, end, next, promise
+```
+
+- `process.nextTick` 은 **Microtask보다도 먼저** 실행됨
+- 재귀 호출하면 **이벤트 루프가 진행 못 함** (I/O 기아)
+
+```js
+// 안 좋음 — 무한 nextTick
+function bad() {
+  process.nextTick(bad);
+}
+```
+
+---
+
+## 9. io_uring — 리눅스 차세대 I/O
+
+Linux 5.1 (2019) 도입. epoll의 한계를 넘는 **진짜 비동기 I/O**.
+
+### 구조
+
+- **Submission Queue (SQ)** + **Completion Queue (CQ)** — 링 버퍼 2개
+- 커널과 유저가 **공유 메모리** 로 접근, 시스템 콜 없이 엔큐 가능
+- `SQPOLL` 모드: 커널 스레드가 SQ를 폴링해 시스템 콜 zero
+
+### 효과
+
+- 기존 epoll보다 latency·throughput 모두 개선
+- Node.js 22부터 옵션 지원, Deno/Bun에서 적극 활용
+
+---
+
+## 10. Reactor vs Proactor 패턴
+
+### Reactor (epoll 스타일)
+
+```
+1. 이벤트 등록
+2. 이벤트 대기 (블록)
+3. "읽을 준비 됨" 알림 수신
+4. 직접 read() 호출
+```
+
+### Proactor (IOCP, io_uring 스타일)
+
+```
+1. 비동기 요청 등록 (버퍼 제공)
+2. 커널이 읽기 완료
+3. "읽기 완료됨" 알림 (결과 포함)
+```
+
+| | Reactor | Proactor |
+|---|---------|----------|
+| I/O 실행 | 유저 공간 | 커널 |
+| 복잡도 | 단순 | 버퍼 관리 복잡 |
+| 성능 | 좋음 | 더 좋음 (시스템 콜 감소) |
+
+---
+
+## 11. 실전 — 브라우저 측 병렬 요청
+
+```js
+// 순차 — 나쁨
+const users = await fetch('/users').then(r => r.json());
+const orders = await fetch('/orders').then(r => r.json());
+// 총 시간 = users + orders
+
+// 병렬 — 좋음
+const [users, orders] = await Promise.all([
+  fetch('/users').then(r => r.json()),
+  fetch('/orders').then(r => r.json())
+]);
+// 총 시간 = max(users, orders)
+```
+
+### 병렬도 제한
+
+```js
+// 1000개 동시 요청은 브라우저·서버 모두 힘듦
+// 동시성 6개로 제한
+async function pool(tasks, limit = 6) {
+  const results = [];
+  const executing = new Set();
+  for (const task of tasks) {
+    const p = Promise.resolve().then(task);
+    results.push(p);
+    executing.add(p);
+    p.finally(() => executing.delete(p));
+    if (executing.size >= limit) await Promise.race(executing);
+  }
+  return Promise.all(results);
+}
+```
+
+---
+
+## 12. Backpressure (배압)
+
+생산자가 소비자보다 빠를 때의 대처.
+
+### Node.js Stream
+
+```js
+const readable = fs.createReadStream('huge.txt');
+const writable = fs.createWriteStream('out.txt');
+
+// 나쁨 — 메모리 폭발 가능
+readable.on('data', (chunk) => writable.write(chunk));
+
+// 좋음 — pipe가 backpressure 자동 처리
+readable.pipe(writable);
+
+// 또는 직접
+readable.on('data', (chunk) => {
+  if (!writable.write(chunk)) {
+    readable.pause();
+    writable.once('drain', () => readable.resume());
+  }
+});
+```
+
+### 브라우저 Streams API
+
+```js
+// 대용량 파일 업로드 시 ReadableStream + WritableStream
+const response = await fetch('/upload', {
+  method: 'POST',
+  body: fileStream, // ReadableStream
+  duplex: 'half'
+});
+```
+
+---
+
+## 13. ⚠️ 자주 하는 오해
+
+| 오해 | 실제 |
+|------|------|
+| 비동기 = 멀티 스레드 | 아니다. 단일 스레드 비동기가 가능 (Node.js) |
+| `async/await` 는 코드를 멀티 스레드로 만든다 | 아니다. 싱글 스레드에서 이벤트 루프로 실행 순서만 바꿈 |
+| `fs.readFileSync` 가 비동기보다 빠르다 | 동기는 이벤트 루프를 블록 → 전체 처리량 저하 |
+| HTTP 요청 1000개면 스레드 1000개 필요 | 이벤트 루프 + epoll로 1 스레드 처리 가능 |
+| Node.js = 빠름 | I/O 바운드만 빠름. CPU 바운드는 Worker/JNI 필요 |
+
+---
+
+## 14. 연습 문제
+
+**Q1.** Sync+Non-Blocking 과 Async+Non-Blocking 의 차이는?
+
+<details>
+<summary>정답</summary>
+
+- **Sync+Non-Blocking**: 호출은 즉시 리턴하지만 완료 확인은 **내가** 해야 함 (poll). 결과를 직접 가져옴.
+- **Async+Non-Blocking**: 호출은 즉시 리턴하고 완료는 **커널이** 알려줌 (콜백, 이벤트, 시그널).
+
+"누가 결과를 전달하는가" 의 차이.
+
+</details>
+
+**Q2.** epoll이 select보다 빠른 이유는?
+
+<details>
+<summary>정답</summary>
+
+1. **등록은 한 번**, 대기만 반복 (select는 매 호출 FD 배열 복사)
+2. 커널이 **발생한 이벤트 FD만** 반환 (select는 전체 FD를 훑어야 함)
+3. **FD 1024 제한 없음**
+4. 복잡도 O(발생한 개수) vs O(N)
+
+</details>
+
+**Q3.** Node.js가 파일 I/O를 libuv 스레드 풀에서 하는 반면 네트워크 I/O는 왜 스레드 풀을 안 쓰는가?
+
+<details>
+<summary>정답</summary>
+
+네트워크는 OS가 제공하는 비동기 I/O (Linux의 epoll, BSD의 kqueue, Windows의 IOCP)로 **커널 수준에서** 이벤트 기반 처리 가능. 파일 I/O는 대부분의 OS에서 진짜 비동기가 없거나 불완전해 스레드 풀로 블로킹 I/O를 격리한다. (io_uring이 보급되면 미래엔 바뀔 수 있음)
+
+</details>
+
+**Q4.** 브라우저에서 1000개 URL을 fetch 할 때 `Promise.all(urls.map(fetch))` 가 비효율적인 이유는?
+
+<details>
+<summary>정답</summary>
+
+1. 브라우저의 **도메인당 동시 연결 수 제한** (HTTP/1.1: 6개, HTTP/2는 다중화) 로 어차피 큐잉됨
+2. 서버가 DoS로 오해하거나 레이트 리미트에 걸림
+3. 동시 Promise 1000개의 메모리 비용
+4. 에러 시 어느 하나라도 reject되면 전체 실패
+
+해결: `pool` 패턴으로 동시성 6~16개 제한, 또는 p-limit 라이브러리.
+
+</details>
+
+**Q5.** `process.nextTick` 과 `setImmediate` 중 어느 것이 먼저 실행되는가?
+
+<details>
+<summary>정답</summary>
+
+**`process.nextTick` 이 먼저**. nextTick은 이벤트 루프의 각 phase 사이에 즉시 실행되고 Microtask보다도 앞선다. setImmediate는 Check phase에 실행된다. 이름과 달리 nextTick이 "지금 당장", setImmediate가 "다음 틱 시작에".
+
+</details>
+
+**Q6.** Backpressure가 없으면 어떤 문제가 생기는가?
+
+<details>
+<summary>정답</summary>
+
+생산자가 소비자보다 빠를 때 중간 버퍼가 무한 증가해 **메모리 폭발(OOM)** 이 발생한다. 예: 1GB 파일을 `data` 이벤트로 읽으면서 느린 네트워크로 쓸 때, 메모리에 수백 MB가 쌓임. `pipe()` 는 내부적으로 `drain` 이벤트로 생산자를 일시정지시켜 해결한다.
+
+</details>
+
+**Q7.** io_uring이 epoll보다 효율적인 핵심 이유는?
+
+<details>
+<summary>정답</summary>
+
+1. **공유 링 버퍼** — 유저 ↔ 커널 사이 시스템 콜 없이 요청/완료 교환
+2. **Proactor 모델** — 커널이 실제 I/O 수행 후 결과 반환, 유저 공간 read() 호출 불필요
+3. **배치** — 한 번의 시스템 콜로 수백 개 I/O 요청 제출
+4. **SQPOLL 모드** — 커널 스레드가 폴링하여 시스템 콜 zero 가능
+
+결과적으로 작은 I/O가 많은 워크로드에서 epoll보다 2~10배 성능 향상.
+
+</details>
+
+---
+
+## 15. 체크리스트
+
+- [ ] Sync/Async × Blocking/Non-Blocking 4가지 조합을 구분한다
+- [ ] select → poll → epoll 의 개선점을 안다
+- [ ] C10K 문제의 의미와 해결 방향을 안다
+- [ ] libuv 이벤트 루프 6단계를 외운다
+- [ ] Node.js가 파일/네트워크 I/O를 다르게 처리하는 이유를 안다
+- [ ] `process.nextTick` 과 `setImmediate` 의 실행 시점을 구분한다
+- [ ] Reactor vs Proactor 패턴을 안다
+- [ ] Backpressure 개념과 `pipe()` 의 역할을 이해한다
+- [ ] `Promise.all` 병렬 요청의 동시성 제한 필요를 인지한다
+
+---
+
+[← 3-1. 프로세스와 스레드](3단계-1-프로세스와-스레드) | [3-3. 메모리 관리 →](3단계-3-메모리-관리)

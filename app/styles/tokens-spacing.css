@@ -1,0 +1,78 @@
+/* ============================================================
+   JUNSEOK CS study — tokens.css
+   Spacing, radii, shadows, motion. Import AFTER colors_and_type.css.
+   ============================================================ */
+
+:root {
+  /* ---- Spacing scale ---- */
+  --space-0:   0;
+  --space-1:   4px;
+  --space-2:   8px;
+  --space-3:   12px;
+  --space-4:   16px;
+  --space-5:   20px;
+  --space-6:   24px;
+  --space-7:   32px;
+  --space-8:   48px;
+  --space-9:   64px;
+  --space-10:  96px;
+
+  /* ---- Radii ---- */
+  --radius-sm:   6px;
+  --radius-md:   10px;
+  --radius-lg:   14px;
+  --radius-xl:   20px;
+  --radius-2xl:  28px;
+  --radius-full: 9999px;
+
+  /* ---- Shadows (light) ---- */
+  --shadow-xs: 0 1px 2px rgb(0 0 0 / 0.04);
+  --shadow-sm: 0 2px 6px rgb(0 0 0 / 0.05), 0 1px 2px rgb(0 0 0 / 0.04);
+  --shadow-md: 0 8px 24px rgb(0 0 0 / 0.06), 0 2px 6px rgb(0 0 0 / 0.04);
+  --shadow-lg: 0 20px 48px rgb(0 0 0 / 0.12), 0 4px 12px rgb(0 0 0 / 0.06);
+  --shadow-xl: 0 32px 80px rgb(0 0 0 / 0.18), 0 8px 20px rgb(0 0 0 / 0.08);
+
+  /* Focus ring */
+  --ring-focus: 0 0 0 2px var(--bg), 0 0 0 4px var(--indigo-500);
+
+  /* ---- Motion ---- */
+  --ease-standard:    cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ease-emphasized:  cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-decelerate:  cubic-bezier(0, 0, 0.2, 1);
+  --ease-accelerate:  cubic-bezier(0.4, 0, 1, 1);
+
+  --dur-instant: 80ms;
+  --dur-fast:    120ms;
+  --dur-base:    200ms;
+  --dur-slow:    320ms;
+  --dur-slower:  600ms;
+
+  /* ---- Layout ---- */
+  --container-sm:  640px;
+  --container-md:  840px;
+  --container-lg:  1040px;
+  --container-xl:  1200px;
+  --reading-width: 720px;
+
+  --nav-height: 64px;
+  --sidebar-width: 280px;
+
+  /* ---- Fluid layout ----
+     --pad-x: container 좌우 패딩 — 모바일 16px → 데스크톱 32px.
+     --section-y: 세로 섹션 간격. 둘 다 `clamp()`로 자연스러운 스케일.      */
+  --pad-x: clamp(16px, 4vw, 32px);
+  --section-y: clamp(32px, 5vw, 56px);
+
+  /* ---- Fluid type scale ---- */
+  --fs-hero: clamp(32px, 4.5vw + 16px, 52px);
+  --fs-stage-hero: clamp(28px, 3.5vw + 14px, 44px);
+  --fs-lesson-title: clamp(22px, 1.6vw + 14px, 30px);
+  --fs-section: clamp(22px, 1.4vw + 14px, 28px);
+}
+
+[data-theme="dark"] {
+  --shadow-xs: 0 1px 2px rgb(0 0 0 / 0.4), inset 0 1px 0 rgb(255 255 255 / 0.03);
+  --shadow-sm: 0 2px 8px rgb(0 0 0 / 0.5), inset 0 1px 0 rgb(255 255 255 / 0.04);
+  --shadow-md: 0 12px 32px rgb(0 0 0 / 0.55), inset 0 1px 0 rgb(255 255 255 / 0.05);
+  --shadow-lg: 0 24px 60px rgb(0 0 0 / 0.7), inset 0 1px 0 rgb(255 255 255 / 0.06);
+}

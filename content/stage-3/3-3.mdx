@@ -1,0 +1,556 @@
+
+> **목표**: **스택과 힙, 가상 메모리, V8 가비지 컬렉터, 메모리 누수** 를 이해하고 JS 앱에서 누수를 예방·진단할 수 있어야 한다.
+
+---
+
+## 0. "메모리"가 뭐고 왜 관리해야 하나 — 초심자용
+
+### 0-1. 메모리는 "일하는 책상"
+
+컴퓨터 저장 공간 두 가지:
+
+- **디스크(HDD/SSD)**: 장기 보관. 전원 꺼도 유지. 느림. 큼 (TB).
+- **메모리(RAM)**: 지금 쓰는 데이터. 전원 끄면 사라짐. **빠름**. 작음 (보통 8~32GB).
+
+프로그램이 실행되는 동안 쓰는 모든 변수, 객체, 함수 — 전부 메모리에 있다. 디스크는 **창고**, 메모리는 **책상** 이라고 보면 된다.
+
+### 0-2. JS 개발자는 "메모리를 관리 안 한다"는 오해
+
+C/C++ 개발자는 `malloc` / `free`로 메모리를 **직접** 할당하고 해제한다. JS는 **가비지 컬렉터(GC)** 가 자동으로 해준다. 그래서 "JS는 메모리 걱정 안 해도 된다"고 생각한다 — **틀렸다**.
+
+실제 SPA 앱에서 흔한 사고:
+
+- 페이지 바꿨는데 이전 페이지의 이벤트 리스너가 남아서 **메모리 누수**
+- `setInterval` 안 해제해서 **콜백이 계속 쌓임**
+- 큰 배열을 클로저가 참조해서 **GC가 회수 못 함**
+
+사용자가 쓸수록 메모리가 쌓여서, 결국 브라우저 탭이 죽는다. **GC가 있어도, 개발자가 "뭘 참조하고 있는지"는 신경 써야 한다.**
+
+### 0-3. 이 장에서 배울 큰 그림
+
+| 개념 | 한 줄 |
+|---|---|
+| 스택(Stack) | 함수 호출 프레임과 지역 변수. **자동으로** 정리됨 |
+| 힙(Heap) | 객체·배열·함수가 사는 공간. **GC가 필요** |
+| 가상 메모리 | "실제 RAM보다 많이 쓰는 것처럼" 만들어주는 OS 속임수 |
+| 가비지 컬렉터(GC) | 아무도 참조 안 하는 객체를 찾아 회수하는 자동 청소부 |
+| 메모리 누수 | "참조는 남아있는데 앞으로 안 쓸" 객체가 GC를 피하는 것 |
+
+### 0-4. [1-5](1단계-5-스택-큐-힙.md)의 "힙"과 헷갈리지 말 것
+
+- [1-5](1단계-5-스택-큐-힙.md)의 **힙** = 우선순위 큐 자료구조
+- 이 장의 **힙** = 메모리 영역 이름
+
+**완전히 다른 개념이 같은 이름을 쓰는 것.** 문맥으로 구분한다.
+
+---
+
+## 1. 프로세스 메모리 영역
+
+```
+높은 주소 ┌──────────────────────┐
+         │   Kernel Space        │  (유저 접근 불가)
+         ├──────────────────────┤
+         │   Stack       ↑↑↑     │  함수 호출 프레임, 지역 변수
+         │     ↓          ↑      │
+         │    (빈 영역)           │
+         │     ↑          ↓      │
+         │   Heap        ↓↓↓     │  malloc, new
+         ├──────────────────────┤
+         │   BSS                 │  미초기화 전역 변수 (0)
+         ├──────────────────────┤
+         │   Data                │  초기화된 전역 변수
+         ├──────────────────────┤
+         │   Text (Code)         │  실행 코드 (읽기 전용)
+낮은 주소 └──────────────────────┘
+```
+
+### 스택 vs 힙
+
+| | 스택 | 힙 |
+|---|------|-----|
+| 할당 | 컴파일러가 자동 | 명시적 (`malloc`, `new`) |
+| 속도 | 매우 빠름 (SP 이동) | 상대적 느림 |
+| 크기 | 제한 (보통 1~8MB) | 큼 (가상 메모리 한계) |
+| 수명 | 스코프 종료 시 소멸 | 명시적 해제 또는 GC |
+| 단편화 | 없음 | 발생 |
+| 접근 | LIFO | 임의 |
+
+### JS에서
+
+- **원시 타입 (number, boolean, null, undefined, symbol, bigint)**: 스택에 값
+- **참조 타입 (object, array, function)**: 힙에 값, 스택에 참조
+
+```js
+let a = 1;            // 스택
+let b = a;            // 스택에 복사 → 독립적
+let obj = {x: 1};     // 힙에 객체, 스택에 참조
+let obj2 = obj;       // 참조 복사 → 같은 객체
+obj2.x = 2;
+console.log(obj.x);   // 2
+```
+
+---
+
+## 2. 가상 메모리
+
+OS가 각 프로세스에게 **독립된 4GB(32bit) 또는 거대한 주소 공간(64bit)** 을 제공하는 환상.
+
+### 핵심 개념
+
+- **페이지(Page)**: 가상 메모리 단위 (보통 4KB)
+- **프레임(Frame)**: 물리 메모리 단위
+- **페이지 테이블**: 가상 주소 → 물리 주소 매핑
+- **TLB (Translation Lookaside Buffer)**: 페이지 테이블 캐시
+
+### 페이지 폴트
+
+```
+1. CPU가 가상 주소 접근
+2. TLB 미스 → 페이지 테이블 조회
+3. 페이지가 메모리에 없음 → Page Fault 인터럽트
+4. OS가 디스크에서 로드 (Major Fault) 또는 0으로 초기화 (Minor Fault)
+5. 페이지 테이블 업데이트, 프로세스 재개
+```
+
+### 스왑
+
+- 물리 메모리가 부족하면 페이지를 **디스크로 축출** (swap out)
+- 필요 시 다시 로드 (swap in)
+- 스왑이 과도하면 **스래싱(Thrashing)** — 처리는 안 되고 페이지만 들락날락
+
+### FE 개발자에게 의미
+
+- Node.js 서버 메모리 누수 → 스왑 → 응답 시간 급등
+- 클라이언트 RAM 부족 → 브라우저가 탭을 discard
+
+---
+
+## 3. 메모리 할당자 — malloc 내부
+
+유저가 `malloc(N)` 하면 할당자가 힙에서 공간을 찾아 반환.
+
+### 알고리즘
+
+- **First Fit** / **Best Fit** / **Worst Fit**
+- 현대 할당자: **segregated free list** — 크기대별 리스트
+- **jemalloc, tcmalloc** — 멀티스레드 최적화
+
+### 문제
+
+- **단편화(Fragmentation)**
+  - External: 빈 공간은 총합 충분하지만 연속 공간이 없음
+  - Internal: 블록이 요청보다 큼
+
+### Free
+
+```c
+free(ptr);  // 주소만 반환, 값은 남아 있음 → Use-After-Free 취약점
+```
+
+C/C++는 수동 관리 → 실수로 **메모리 누수, 이중 해제, UAF** 발생.
+이를 해결한 것이 GC.
+
+---
+
+## 4. 가비지 컬렉션 — 원리
+
+**도달 불가능한 객체를 자동 회수**.
+
+### Root Set
+
+- 전역 객체 (`window`, `global`)
+- 현재 스택의 지역 변수
+- 활성 클로저
+
+### Reachability
+
+**Root에서 참조 체인으로 도달 가능한 모든 객체**는 살아 있다.
+
+```js
+let a = {}; // a → 객체1 (root에서 도달)
+let b = {next: a}; // b → 객체2 → 객체1
+b = null; // 객체2는 unreachable (root에서 도달 못 함)
+a = null; // 객체1도 unreachable
+// 다음 GC에 둘 다 회수
+```
+
+---
+
+## 5. GC 알고리즘
+
+### Reference Counting
+
+```
+각 객체에 참조 개수 저장
+참조 +1 / -1
+0이 되면 즉시 회수
+```
+
+- 장점: 즉시 회수, 일시 정지 없음
+- 단점: **순환 참조** 해결 못 함
+
+```js
+// 순환 참조 — refcount는 둘 다 1
+a.next = b;
+b.next = a;
+// a = null, b = null 해도 회수 안 됨 (실제 JS는 아래 방법 사용)
+```
+
+Python이 refcount + cycle detector로 보완.
+
+### Mark and Sweep
+
+```
+1. Mark: Root부터 도달 가능한 객체에 표시
+2. Sweep: 표시 없는 객체 모두 회수
+```
+
+- 순환 참조 해결
+- 단점: 전체 순회 비용 + 힙 단편화
+
+### Copying (Cheney)
+
+```
+힙을 From/To 두 공간으로 분할
+살아 있는 객체만 To로 복사 → From 전체 비움
+```
+
+- 단편화 없음
+- 단점: 힙의 절반만 사용
+
+### Mark-Compact
+
+```
+Mark 후 살아 있는 객체를 한쪽으로 몰아서 단편화 제거
+```
+
+### Generational (세대별)
+
+**관측 사실: 대부분의 객체는 곧 죽는다** (유아 사망률이 높다).
+
+```
+Young Generation (Nursery)  — Copying GC, 빠름
+Old Generation              — Mark-Compact, 느림
+```
+
+여러 번 살아남으면 Old로 promote. Young GC는 자주, Old GC는 드물게.
+
+---
+
+## 6. V8의 GC
+
+V8 = Chrome, Node.js의 JS 엔진.
+
+### 힙 구조
+
+```
+┌─────────────────────────────────┐
+│          Young Generation        │
+│  ┌──────────┐    ┌──────────┐   │
+│  │   From   │ ⇄ │    To    │    │  Scavenge (Copying)
+│  └──────────┘    └──────────┘   │  ~1MB~16MB
+├─────────────────────────────────┤
+│          Old Generation          │
+│     Old Pointer Space            │  Mark-Compact + Sweep
+│     Old Data Space               │  수백 MB까지
+├─────────────────────────────────┤
+│     Large Object Space           │  1MB 이상 객체 별도
+├─────────────────────────────────┤
+│     Code Space                   │  컴파일된 코드
+└─────────────────────────────────┘
+```
+
+### Scavenge (Minor GC)
+
+- Young Generation에서 실행
+- Copying 기반, 수 ms
+- 살아남으면 Old로 promote
+
+### Major GC (Mark-Compact)
+
+- Old Generation에서 실행
+- **Incremental Marking**: 전체 일시 정지 없이 나눠서 mark
+- **Concurrent Marking**: 별도 스레드에서 mark (V8 6.x+)
+- **Parallel Sweep**: 여러 스레드로 sweep
+
+### Orinoco — V8의 현재 GC 프로젝트
+
+- Concurrent, Parallel, Incremental 병행
+- JS 실행 중단 시간을 수 ms 이하로 유지
+
+---
+
+## 7. 메모리 누수 — JS에서
+
+GC가 있어도 **참조가 남아 있으면 회수 안 된다**. 이게 JS 메모리 누수의 본질.
+
+### 원인 1 — 의도치 않은 전역
+
+```js
+function leak() {
+  x = []; // var/let/const 없이 → 전역 변수
+  for (let i = 0; i < 1e6; i++) x.push(i);
+}
+// 함수 종료 후에도 전역 x는 살아 있음
+```
+
+`'use strict'` 로 방지.
+
+### 원인 2 — 타이머·콜백
+
+```js
+const data = loadHugeData();
+setInterval(() => console.log(data.length), 1000);
+// 인터벌을 clear하지 않으면 data 영원히 살아 있음
+```
+
+### 원인 3 — DOM 참조 유지
+
+```js
+const cache = new Map();
+function onClick(el) {
+  cache.set(el.id, el); // DOM 제거돼도 cache가 참조
+}
+// solution: WeakMap 사용 or cache.delete()
+```
+
+### 원인 4 — 제거되지 않은 이벤트 리스너
+
+```js
+// React 컴포넌트 unmount 시 cleanup 누락
+useEffect(() => {
+  const handler = () => {...};
+  window.addEventListener('scroll', handler);
+  return () => window.removeEventListener('scroll', handler); // ← 필수
+}, []);
+```
+
+### 원인 5 — 클로저
+
+```js
+function makeLeak() {
+  const huge = new Array(1e6);
+  return () => huge[0]; // 클로저가 huge 전체를 붙잡음
+}
+```
+
+### 원인 6 — Detached DOM
+
+```js
+let el = document.getElementById('btn');
+document.body.removeChild(el);
+// el 변수가 살아 있으면 DOM 노드가 GC되지 않음
+el = null; // 해제 필요
+```
+
+---
+
+## 8. WeakMap / WeakSet / WeakRef
+
+### WeakMap
+
+```js
+const cache = new WeakMap();
+cache.set(domNode, metadata);
+// domNode가 다른 곳에서 참조가 끊기면 자동 회수
+```
+
+- 키는 **객체만**, 원시 타입 불가
+- 키에 대한 참조가 Weak → GC가 수거할 수 있음
+- 순회 불가 (iterable 아님)
+
+### WeakRef (ES2021)
+
+```js
+const ref = new WeakRef(bigObject);
+// 나중에
+const obj = ref.deref();
+if (obj) { /* 살아 있음 */ }
+```
+
+- 캐시, 옵저버 패턴 등에 유용
+- 남용 금지 — GC 타이밍에 의존
+
+### FinalizationRegistry
+
+```js
+const registry = new FinalizationRegistry((heldValue) => {
+  console.log(`cleanup: ${heldValue}`);
+});
+registry.register(obj, 'metadata');
+// obj가 GC되면 콜백 실행
+```
+
+---
+
+## 9. 메모리 누수 진단 — Chrome DevTools
+
+### Memory 패널
+
+1. **Heap Snapshot**: 특정 시점의 전체 힙 스냅샷
+2. **Allocation instrumentation on timeline**: 할당을 시간대별로 추적
+3. **Allocation sampling**: 성능 영향 적게 프로파일링
+
+### 3-Snapshot 기법
+
+```
+1. 초기 상태 스냅샷 A
+2. 누수 예상 액션 여러 번 반복
+3. 스냅샷 B
+4. 다시 여러 번 반복
+5. 스냅샷 C
+6. "Objects allocated between A and B, that are still alive in C" 확인
+```
+
+반복 액션 후에도 계속 증가하는 객체가 누수 후보.
+
+### Retainers
+
+- 해당 객체를 **살아 있게 만드는 참조 체인** 확인
+- 보통 Map, Set, 클로저, 전역 객체가 원인
+
+### Detached DOM Nodes
+
+- Heap Snapshot에서 "Detached" 필터
+- DOM에서 제거됐는데 JS 참조로 살아 있는 노드
+
+### Performance → Memory
+
+- 시간에 따른 힙 크기 추이
+- 톱니 모양이 정상 (GC 주기)
+- **계단식 상승** = 누수 의심
+
+---
+
+## 10. 실무 가이드
+
+### React 메모리 누수 체크
+
+```jsx
+useEffect(() => {
+  const controller = new AbortController();
+  fetch('/api', { signal: controller.signal }).then(...);
+  return () => controller.abort(); // ← unmount 시 중단
+}, []);
+```
+
+### 구독 해제 패턴
+
+```js
+class Emitter {
+  listeners = new Set();
+  subscribe(fn) {
+    this.listeners.add(fn);
+    return () => this.listeners.delete(fn); // ← 해제 함수 반환
+  }
+}
+```
+
+### 이미지 / Blob URL
+
+```js
+const url = URL.createObjectURL(blob);
+img.src = url;
+img.onload = () => URL.revokeObjectURL(url); // ← 반드시 해제
+```
+
+---
+
+## 11. ⚠️ 자주 하는 실수
+
+| 실수 | 결과 |
+|------|------|
+| 배열을 클리어할 때 `arr.length = 0` 대신 `arr = []` | 기존 참조자들은 옛 배열 참조 유지 |
+| `delete obj.key` 를 자주 씀 | hidden class 변경 → V8 최적화 깨짐 (메모리보단 성능 문제) |
+| 거대한 문자열 반복 `+=` | O(N²), 최근 V8은 Rope로 완화하나 여전히 주의 |
+| 콘솔에 객체 로깅 | DevTools가 참조 유지 → GC 방해 |
+| `setInterval(fn, 0)` | 백그라운드 탭에서도 계속 돌아 메모리/CPU 소모 |
+
+---
+
+## 12. 연습 문제
+
+**Q1.** 원시 타입과 참조 타입이 메모리에 저장되는 방식의 차이는?
+
+<details>
+<summary>정답</summary>
+
+원시 타입(number, boolean 등)은 값 자체가 스택에 저장되어 변수 간 복사 시 **독립적**이다. 참조 타입(object, array 등)은 값은 힙에, 참조(주소)만 스택에 있어 변수 간 복사는 **같은 힙 객체를 공유**한다.
+
+</details>
+
+**Q2.** Reference Counting이 순환 참조를 처리 못 하는 이유는?
+
+<details>
+<summary>정답</summary>
+
+A ↔ B 순환 구조에서 A와 B의 refcount가 서로 참조로 인해 각각 1씩 유지된다. 외부 참조가 끊겨도 내부 참조로 refcount가 0이 되지 않아 영원히 회수되지 않는다. Mark-and-Sweep은 Root에서의 도달 가능성을 보므로 순환이 Root에서 끊기면 회수 가능.
+
+</details>
+
+**Q3.** 세대별 GC가 효율적인 이유는?
+
+<details>
+<summary>정답</summary>
+
+**대부분의 객체는 짧게 산다**(유아 사망률 높음)는 경험적 관찰 때문. Young Generation만 자주 짧게 GC하면 대부분이 회수되고, 살아남은 소수만 Old로 보내 느린 GC를 드물게 수행할 수 있다. 전체를 항상 스캔하는 것보다 처리량이 크게 향상된다.
+
+</details>
+
+**Q4.** `WeakMap` 과 `Map` 중 무엇을 DOM 요소의 캐시에 써야 하는가?
+
+<details>
+<summary>정답</summary>
+
+**WeakMap**. DOM 요소가 제거되어 다른 참조가 사라지면 WeakMap의 엔트리가 자동으로 GC된다. Map은 DOM 요소가 제거돼도 키로 붙잡고 있어 누수 발생.
+
+</details>
+
+**Q5.** React `useEffect` cleanup을 빼먹었을 때 발생하는 전형적인 메모리 누수 예는?
+
+<details>
+<summary>정답</summary>
+
+1. `setInterval` 해제 안 됨 → 컴포넌트 unmount 후에도 타이머가 돌며 참조 유지
+2. 이벤트 리스너 해제 안 됨 → `window.addEventListener` 가 콜백을 붙잡고 있음
+3. AbortController 중단 안 됨 → fetch 응답 후 setState 시도해 경고 + 가짜 DOM 참조 유지
+4. WebSocket/SSE 연결 미종료 → 핸들러가 상태 클로저 유지
+
+</details>
+
+**Q6.** Detached DOM Node가 무엇이며 왜 문제인가?
+
+<details>
+<summary>정답</summary>
+
+DOM 트리에서 제거됐지만 **JS 변수가 여전히 참조하는 노드**. 브라우저는 이 노드와 그 모든 자식 노드의 메모리를 해제 못 한다. 크게는 전체 페이지 트리 크기만큼 누수 가능. DevTools Memory에서 "Detached" 필터로 식별.
+
+</details>
+
+**Q7.** Incremental Marking이 필요한 이유는?
+
+<details>
+<summary>정답</summary>
+
+GC 중 JS 실행이 멈추면 **사용자 인터랙션이 프리즈** 된다 (수십 ms~수백 ms). Incremental Marking은 mark 작업을 작은 덩어리로 쪼개 JS 실행 사이사이에 끼워 넣어 **정지 시간을 1~5ms 수준** 으로 유지한다. 대신 총 GC 시간은 약간 늘어난다. UX를 위해 처리량을 희생하는 트레이드오프.
+
+</details>
+
+---
+
+## 13. 체크리스트
+
+- [ ] 스택과 힙의 차이를 4가지 이상 말할 수 있다
+- [ ] 가상 메모리와 페이지 폴트 동작을 안다
+- [ ] GC 알고리즘 4종(RefCount, Mark-Sweep, Copying, Generational) 을 비교할 수 있다
+- [ ] V8의 Young/Old 세대 분리 이유를 안다
+- [ ] Incremental/Concurrent Marking의 목적을 설명할 수 있다
+- [ ] JS 메모리 누수 6대 원인을 외운다
+- [ ] WeakMap, WeakRef, FinalizationRegistry의 용도를 안다
+- [ ] DevTools로 3-Snapshot 진단을 할 수 있다
+- [ ] React useEffect cleanup을 빼먹지 않는다
+
+---
+
+[← 3-2. 동기·비동기와 I/O 모델](3단계-2-동기-비동기와-IO-모델) | [3-4. CPU·캐시·지역성 →](3단계-4-CPU-캐시-지역성)

@@ -1,0 +1,612 @@
+
+> **목표**: **실행 컨텍스트(EC), 렉시컬 환경, 스코프 체인, 클로저, this 바인딩** 을 내부 구조 수준에서 이해해 JS 동작의 "왜" 를 설명할 수 있어야 한다.
+
+* * *
+
+## 0. "함수가 실행된다"는 건 뭐가 일어나는 일인가 — 초심자용
+
+### 0-1. 이 장에서 답하는 질문들
+
+개발 중 당연하게 쓰던 것들이지만, "왜 이렇게 되는가?" 에 답하기 어려운 것들:
+
+- 함수 안에서 바깥 변수에 왜 접근할 수 있나? ← 스코프
+- 함수가 끝났는데 왜 그 안의 변수가 사라지지 않지? ← **클로저**
+- `this`는 왜 호출 방식에 따라 값이 달라지나?
+- `var` 로 선언한 변수가 왜 **선언 전**에도 접근되나? (호이스팅)
+- `let` 은 왜 `var` 과 다르게 동작하나?
+
+이 모든 질문의 답이 **"실행 컨텍스트"** 라는 한 개념에 담겨있다.
+
+### 0-2. 실행 컨텍스트 = "코드가 실행되는 맥락"
+
+함수 하나가 호출되면, JS 엔진은 **그 함수를 위한 상자**를 만든다. 상자 안에는:
+
+- 이 함수에서 쓸 수 있는 **변수들의 목록**
+- 바깥 세계로 나가는 **문**(스코프 체인)
+- `this` 가 가리키는 대상
+
+이 상자가 **실행 컨텍스트(Execution Context)**. 상자는 [1-5](1단계-5-스택-큐-힙.md)의 **스택** 에 쌓인다 (Call Stack). 함수가 끝나면 상자는 없어짐. 이게 기본 구조.
+
+### 0-3. 스코프 (Scope) = "이 변수 어디서 쓸 수 있나"
+
+```js
+const outer = 1;
+function f() {
+  const inner = 2;
+  console.log(outer); // 1 — 바깥 변수 접근 가능
+}
+console.log(inner); // 에러 — 안쪽 변수는 밖에서 못 봄
+```
+
+**바깥 스코프는 안쪽에서 보이지만, 안쪽은 바깥에서 안 보임.** 이게 스코프.
+
+### 0-4. 클로저 = "함수가 태어난 환경을 기억한다"
+
+```js
+function makeCounter() {
+  let count = 0;
+  return function() {
+    count++;
+    return count;
+  };
+}
+
+const counter = makeCounter();
+counter(); // 1
+counter(); // 2
+```
+
+`makeCounter` 는 이미 끝났는데, 반환된 함수가 여전히 `count` 에 접근한다. **함수가 만들어진 순간의 스코프를 함수에 붙여서 반환**하기 때문. 이 "함수 + 붙어있는 스코프" 조합이 **클로저(Closure)**.
+
+React 에서 `useState` 가 작동하는 원리도 클로저다.
+
+### 0-5. 렉시컬 vs 동적
+
+- **렉시컬 스코프(Lexical Scope)**: 함수가 **어디에 쓰였는지** (코드 위치) 로 스코프 결정 — JS가 채택
+- **동적 스코프(Dynamic Scope)**: 함수가 **어디서 호출됐는지** 로 결정 — JS는 아님
+
+이 장에서 "왜 JS 클로저가 이렇게 작동하는지" 가 렉시컬 스코프로 설명된다.
+
+### 0-6. this 만 예외적
+
+`this` 만은 **호출 방식** 에 따라 동적으로 결정된다 (렉시컬 스코프 규칙에서 예외). 화살표 함수(`=>`) 만 렉시컬한 this를 갖는다. 이 장 후반에서 자세히.
+
+### 0-7. 선행 장 연결
+
+| 관련 장 | 무엇을 가져오나 |
+|---|---|
+| [1-5](1단계-5-스택-큐-힙.md) | Call Stack 구조 |
+| [2-6](2단계-6-이벤트-루프.md) | Call Stack이 Event Loop와 어떻게 엮이나 |
+| [3-3](3단계-3-메모리-관리.md) | 클로저가 GC를 피하는 원리 = 메모리 누수 원인 |
+
+---
+
+## 1. 실행 컨텍스트 (Execution Context)
+
+코드가 실행될 때 **컨텍스트**가 만들어지고 스택(Call Stack)에 쌓인다.
+
+### 종류
+
+- **Global Execution Context** (최초 1개)
+- **Function Execution Context** (함수 호출마다)
+- **Eval Execution Context** (거의 안 씀)
+
+### 구성 (ES2015 이후 명세 기준)
+
+```
+ExecutionContext {
+  LexicalEnvironment     : 최신 변수/함수 바인딩
+  VariableEnvironment    : var 선언용 (레거시 유지)
+  ThisBinding            : this 값
+  Realm                  : 전역 환경, 내장 객체 등
+}
+```
+
+### Call Stack 예
+
+```js
+function outer() {
+  function inner() {
+    console.log('hi');
+  }
+  inner();
+}
+outer();
+
+// Stack 추적:
+// [GlobalEC]
+// [GlobalEC, outerEC]
+// [GlobalEC, outerEC, innerEC]  ← console.log 실행 중
+// [GlobalEC, outerEC]
+// [GlobalEC]
+```
+
+---
+
+## 2. Lexical Environment
+
+ES2015 이후의 **정식 용어**. 스코프를 표현.
+
+```
+LexicalEnvironment {
+  EnvironmentRecord {        // 변수 저장소
+    x: 1,
+    foo: function(){}
+  }
+  outer: [외부 Lex Env 참조]  // 스코프 체인
+}
+```
+
+### 두 종류의 EnvironmentRecord
+
+- **Declarative**: let, const, class, 함수 매개변수
+- **Object**: 전역 객체 (window) 의 속성
+
+---
+
+## 3. 스코프 체인
+
+변수 조회는 현재 스코프 → 외부 → 외부 → ... 전역까지.
+
+```js
+const g = 'global';
+
+function outer() {
+  const o = 'outer';
+  function inner() {
+    const i = 'inner';
+    console.log(i, o, g);  // 스코프 체인 따라 모두 찾음
+  }
+  inner();
+}
+outer();
+```
+
+### 렉시컬 스코프 (정적 스코프)
+
+**코드 작성 위치** 에 따라 외부 스코프가 정해진다 (실행 위치 아님).
+
+```js
+function outer() {
+  const x = 'outer-x';
+  return function inner() {
+    console.log(x);
+  };
+}
+
+const fn = outer();
+
+function caller() {
+  const x = 'caller-x';
+  fn();  // 'outer-x' 출력 (렉시컬, 호출 위치 무관)
+}
+caller();
+```
+
+---
+
+## 4. 스코프의 종류
+
+### ① 전역 스코프
+
+- 모듈 스코프 / 스크립트 스코프로 구분
+- `var` 전역 선언 → window 속성
+- `let`, `const` 전역 → 스크립트 스코프, window에 없음
+
+### ② 함수 스코프
+
+- `var` 가 속하는 스코프
+- 함수 단위
+
+### ③ 블록 스코프 (ES2015+)
+
+- `let`, `const`, `class`, 함수 선언(엄격 모드)
+- `{ }` 단위
+
+```js
+if (true) {
+  var v = 1;   // 함수/전역 스코프
+  let l = 2;   // 블록 스코프
+}
+console.log(v); // 1
+console.log(l); // ReferenceError
+```
+
+---
+
+## 5. Hoisting
+
+JS 엔진은 **선언** 을 스코프 최상단으로 끌어올림 (개념적 표현, 실제 메모리는 아님).
+
+### var
+
+```js
+console.log(x); // undefined (선언만 호이스팅)
+var x = 5;
+```
+
+### let / const — TDZ (Temporal Dead Zone)
+
+```js
+console.log(x); // ReferenceError
+let x = 5;
+```
+
+선언부터 초기화 라인까지의 구간은 **접근 불가** (TDZ). 실제로는 바인딩이 만들어지지만 **uninitialized** 상태.
+
+### 함수 선언
+
+```js
+foo(); // OK
+function foo() { console.log('hi'); }
+```
+
+**함수 선언은 전체가 호이스팅** 됨 (var처럼 선언만이 아니라 값까지).
+
+### 함수 표현식
+
+```js
+foo(); // TypeError: foo is not a function
+var foo = function() {};
+```
+
+`foo` 는 `undefined` 로 호이스팅되고, 함수 할당은 해당 라인에서.
+
+---
+
+## 6. 클로저 (Closure)
+
+**함수가 선언된 시점의 외부 변수를 기억하는 내부 환경**.
+
+```js
+function counter() {
+  let count = 0;
+  return function() {
+    count++;
+    return count;
+  };
+}
+
+const c = counter();
+c(); // 1
+c(); // 2
+c(); // 3
+```
+
+### 내부 구조
+
+`counter` 가 종료돼도 **반환된 inner 함수가 외부 LexEnv를 참조** → GC 대상 아님.
+
+```
+c의 [[Environment]] → counter의 LexEnv { count: 0 → 1 → 2 }
+```
+
+### 활용 — 모듈 패턴
+
+```js
+const Counter = (() => {
+  let count = 0;
+  return {
+    increment: () => ++count,
+    decrement: () => --count,
+    value: () => count
+  };
+})();
+```
+
+### 활용 — 콜백의 상태
+
+```js
+function makeButtons(labels) {
+  labels.forEach((label, i) => {
+    const btn = document.createElement('button');
+    btn.textContent = label;
+    btn.onclick = () => console.log(`clicked ${i}`);  // i 캡처
+    document.body.appendChild(btn);
+  });
+}
+```
+
+### 고전 함정
+
+```js
+// ❌ var의 함수 스코프로 모든 콜백이 마지막 i 봄
+for (var i = 0; i < 3; i++) {
+  setTimeout(() => console.log(i), 100);
+}
+// 3, 3, 3
+
+// ✅ let의 블록 스코프
+for (let i = 0; i < 3; i++) {
+  setTimeout(() => console.log(i), 100);
+}
+// 0, 1, 2
+```
+
+---
+
+## 7. 클로저와 메모리
+
+```js
+function makeLeak() {
+  const huge = new Array(1e6);   // 큰 배열
+  return () => huge[0];          // huge 전체 유지
+}
+```
+
+클로저가 **필요 없는 큰 데이터** 까지 붙잡고 있으면 메모리 누수.
+
+```js
+// 해결
+function makeLight() {
+  const first = new Array(1e6)[0];  // 필요한 값만 꺼내서
+  return () => first;
+}
+```
+
+현대 V8은 일부 최적화로 사용되지 않는 클로저 변수를 해제하기도 하지만, **명시적으로 필요한 값만 캡처** 하는 게 안전.
+
+---
+
+## 8. this 바인딩
+
+JS에서 가장 헷갈리는 부분. **호출 방식** 이 결정.
+
+### 4가지 규칙
+
+```js
+// 1. 일반 호출 → 전역 (엄격 모드는 undefined)
+function foo() { console.log(this); }
+foo(); // window 또는 undefined
+
+// 2. 메서드 호출 → 객체
+const obj = { foo };
+obj.foo(); // obj
+
+// 3. 생성자 호출 → 새 객체
+function Ctor() { this.x = 1; }
+const c = new Ctor(); // c.x === 1
+
+// 4. 명시적 바인딩
+foo.call(obj);
+foo.apply(obj, [1, 2]);
+const bound = foo.bind(obj);
+bound();
+```
+
+### 우선순위
+
+```
+new > bind > call/apply > 메서드 > 일반
+```
+
+### 화살표 함수 → this 없음
+
+```js
+const arrow = () => console.log(this);
+// 자신의 this를 만들지 않음 — 둘러싼 렉시컬 this 사용
+
+class A {
+  constructor() { this.x = 1; }
+  method() {
+    setTimeout(() => console.log(this.x), 0); // 1 (this는 A 인스턴스)
+  }
+}
+```
+
+### 흔한 함정
+
+```js
+const obj = {
+  x: 1,
+  foo() { return this.x; }
+};
+
+const fn = obj.foo;
+fn(); // undefined (일반 호출) — this는 obj 아님
+
+// React 클래스 컴포넌트에서 자주 발생
+class MyComp extends React.Component {
+  handleClick() { console.log(this.props); }
+  // ❌ <button onClick={this.handleClick}> → this 바인딩 사라짐
+  // ✅ 화살표 메서드로 선언하거나 bind
+  handleClick = () => console.log(this.props);
+}
+```
+
+---
+
+## 8.5. arguments vs rest parameters
+
+```js
+function old() {
+  console.log(arguments); // 유사 배열, 모든 인자
+  // ⚠️ 최적화 저해 요인 (V8)
+}
+
+function modern(...args) {
+  console.log(args); // 진짜 배열
+  // 최적화에 유리
+}
+```
+
+화살표 함수는 `arguments` 없음 → rest 사용 필수.
+
+---
+
+## 9. 엄격 모드 (Strict Mode)
+
+```js
+'use strict';
+// 파일/함수 상단에 선언
+```
+
+### 차이점
+
+- 전역 `this` → `undefined`
+- 선언 없는 변수 할당 → `ReferenceError`
+- `with` 금지
+- `delete` 로 변수 삭제 금지
+- 중복 매개변수 이름 금지
+- 8진수 리터럴 `0777` 금지 (`0o777` 사용)
+
+### 기본 엄격
+
+- ES 모듈은 자동 strict
+- 클래스 본문도 자동 strict
+
+---
+
+## 10. 블록 스코프 활용 — IIFE의 몰락
+
+과거:
+```js
+(function() {
+  var privateVar = 1;
+})();
+```
+
+현재:
+```js
+{
+  const privateVar = 1;
+}
+```
+
+ES6 블록 스코프 이후 IIFE의 주요 용도(변수 격리)는 `{ }` 로 충분.
+
+---
+
+## 11. ⚠️ 자주 하는 실수
+
+| 실수 | 결과 |
+|------|------|
+| `var` 의 함수 스코프로 for 루프 | 모든 콜백이 같은 값 참조 |
+| 클래스 메서드를 `onClick={this.method}` | this 바인딩 사라짐 |
+| 화살표 함수에 `arguments` | ReferenceError |
+| 클로저가 필요 없는 큰 변수 캡처 | 메모리 누수 |
+| TDZ 구간에서 변수 접근 | ReferenceError |
+| 전역 `this` 사용 | 모듈에선 undefined, 혼란 |
+
+---
+
+## 12. 연습 문제
+
+**Q1.** 렉시컬 스코프와 동적 스코프의 차이는?
+
+<details>
+<summary>정답</summary>
+
+- **렉시컬(정적)**: **코드 작성 위치** 로 스코프 결정. JS, 대부분 현대 언어.
+- **동적**: **호출 위치** 로 스코프 결정. Bash, Emacs Lisp 등.
+
+렉시컬은 정적 분석이 쉬워 유지보수에 유리.
+
+</details>
+
+**Q2.** `let` 의 TDZ는 왜 존재하는가?
+
+<details>
+<summary>정답</summary>
+
+`var` 처럼 선언 전 `undefined` 로 접근하면 **버그가 숨겨진다**. TDZ는 초기화 전 접근을 ReferenceError로 만들어 버그를 **일찍 실패** 하게 한다. 또 `const` 의 불변 보장과도 정합성 유지(초기화 전에는 값이 없는 상태로 구분).
+
+</details>
+
+**Q3.** 다음 출력은?
+
+```js
+for (var i = 0; i < 3; i++) setTimeout(() => console.log(i), 0);
+for (let j = 0; j < 3; j++) setTimeout(() => console.log(j), 0);
+```
+
+<details>
+<summary>정답</summary>
+
+`3 3 3 0 1 2`.
+
+- `var` 은 함수 스코프 하나 → 콜백이 실행될 때 `i` 는 이미 3
+- `let` 은 매 iteration마다 블록 스코프 새로 생성 → 각 콜백이 다른 `j` 캡처
+
+</details>
+
+**Q4.** 클로저가 메모리 누수가 되는 시나리오는?
+
+<details>
+<summary>정답</summary>
+
+```js
+function handler() {
+  const big = new Array(1e6);
+  document.getElementById('btn').addEventListener('click', () => big.length);
+}
+```
+
+- 이벤트 리스너가 DOM에 살아 있는 동안 `big` 참조 유지
+- 리스너 해제 안 하면 영원히 잡힘
+
+해결: `AbortController`, `removeEventListener`, 필요한 값만 캡처.
+
+</details>
+
+**Q5.** 다음 코드의 `this` 는?
+
+```js
+const obj = {
+  name: 'Alice',
+  greet() {
+    const say = () => console.log(this.name);
+    say();
+  }
+};
+obj.greet();
+```
+
+<details>
+<summary>정답</summary>
+
+`'Alice'`.
+
+화살표 함수 `say` 는 자신의 `this` 를 만들지 않고 둘러싼 렉시컬 `this` 사용. `greet` 메서드 호출 시 `this = obj` 이므로 화살표도 `obj` 를 참조.
+
+</details>
+
+**Q6.** 함수 선언과 함수 표현식의 호이스팅 차이는?
+
+<details>
+<summary>정답</summary>
+
+- **함수 선언**: 전체가 호이스팅 → 선언 전에 호출 가능
+- **함수 표현식**: 변수만 호이스팅 (var은 undefined, let/const는 TDZ). 값 할당은 해당 라인에서 → 선언 전 호출 시 `TypeError` 또는 `ReferenceError`
+
+</details>
+
+**Q7.** `arguments` 를 피해야 하는 이유는?
+
+<details>
+<summary>정답</summary>
+
+1. **V8 최적화 저해**: `arguments.callee`, `arguments.caller` 같은 예전 기능 때문에 다른 함수로 전달되면 최적화가 어렵다.
+2. **진짜 배열이 아님**: Array 메서드 직접 사용 불가.
+3. **화살표 함수에 없음**: 일관성 문제.
+
+대안: `(...args) => {}` rest 파라미터. 진짜 배열이고 최적화도 잘 됨.
+
+</details>
+
+---
+
+## 13. 체크리스트
+
+- [ ] 실행 컨텍스트 구성(LexEnv, ThisBinding) 을 안다
+- [ ] 스코프 체인과 렉시컬 스코프를 설명할 수 있다
+- [ ] var, let, const의 호이스팅·TDZ·스코프 차이를 안다
+- [ ] 클로저의 메모리 구조를 설명할 수 있다
+- [ ] this 바인딩 4가지 규칙과 우선순위를 외운다
+- [ ] 화살표 함수의 this 를 안다
+- [ ] `arguments` 대신 rest parameter 를 쓴다
+- [ ] 엄격 모드의 차이점을 안다
+
+---
+
+[← 5-1. JavaScript 엔진 (V8)](5단계-1-JavaScript-엔진-V8) | [5-3. 컴파일러와 AST →](5단계-3-컴파일러와-AST)

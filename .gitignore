@@ -50,3 +50,6 @@ next-env.d.ts
 
 # leftover empty dir from migration (Windows handle issue)
 /learn-site/
+
+# raw markdown pulled from GitHub Wiki for MDX migration (scratch)
+/wiki-fetched/

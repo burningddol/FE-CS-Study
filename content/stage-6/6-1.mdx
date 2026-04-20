@@ -1,0 +1,811 @@
+
+> **학습 목표**
+> - GoF 디자인 패턴 중 FE에서 자주 등장하는 패턴을 실제 코드로 구현한다
+> - 패턴 이름을 들었을 때 자신의 코드에서 **본 예시**를 즉시 댈 수 있어야 한다
+> - 패턴은 "외우는 것"이 아니라 **문제에 대한 검증된 해결책**임을 이해한다
+> - 패턴을 과도하게 적용하는 것의 위험성을 안다
+
+* * *
+
+## 0. "디자인 패턴"이란 말부터 — 초심자용
+
+### 0-1. 패턴 = "반복되는 문제의 이름표"
+
+건축가 Christopher Alexander가 처음 "패턴" 개념을 제안했다. 여러 건축 설계에서 반복적으로 나타나는 해결책에 **이름**을 붙여, 건축가들이 그 이름만으로 의사소통하게 하려고.
+
+소프트웨어도 마찬가지. 1994년 **GoF (Gang of Four)** 라는 저자 4명이 《Design Patterns》라는 책에서 23개의 패턴을 정리했고, 이게 업계 공용어가 됐다.
+
+### 0-2. 요리 레시피 비유
+
+- **레시피 모음집** = 디자인 패턴 카탈로그
+- **"된장찌개"** = 패턴 이름 (예: Singleton, Observer)
+- **재료·순서** = 구조
+- **"찌개가 싱겁다"** = 해결하는 문제
+- **"국간장 한 스푼"** = 해결책
+
+한 번 이름을 알면, 매번 "A가 변하면 B가 알아야 하는데, A는 B를 모르고, 대신 B가 A를 구독해서..." 설명할 필요 없이 **"Observer 패턴 쓰세요"** 한 마디면 된다. 이게 이름의 힘.
+
+### 0-3. 프론트엔드에서 자주 만나는 패턴 미리보기
+
+| 패턴 | 한 줄 | 프론트 사례 |
+|---|---|---|
+| **Observer** | 상태 변하면 등록된 자들에게 알림 | Vue Reactivity, RxJS |
+| **Singleton** | 클래스 인스턴스 하나만 | 전역 Store, Logger |
+| **Factory** | 객체 생성 로직 캡슐화 | 라우트 → 컴포넌트 매핑 |
+| **Strategy** | 알고리즘을 객체로 바꿔치기 | 결제 수단별 처리, 정렬 옵션 |
+| **Decorator** | 기존 객체에 기능 덧붙이기 | React HOC, TS 데코레이터 |
+| **Command** | 명령을 객체로 | undo/redo |
+| **Module** | 관련 코드를 묶기 | ES Modules |
+
+**이미 매일 쓰고 있지만 이름을 몰랐던 것** 이 대부분이다.
+
+### 0-4. 중요: "패턴에 코드를 끼워 맞추지 말 것"
+
+초보자의 흔한 함정: 패턴 이름을 배우면 **모든 곳에 적용하려 한다**. 결과: 단순한 로직이 3배 복잡해진다.
+
+**올바른 순서**:
+
+1. 먼저 **문제** 를 느낀다 ("상태가 여러 곳에서 동시에 변해서 버그가 나는데...")
+2. 그 문제에 익숙한 **패턴** 을 떠올린다 ("Observer 로 중앙 집중시키면 되겠다")
+3. 구현한다
+
+**잘못된 순서**: "오늘 배운 Singleton 써볼까?" → 불필요한 전역 상태 생성
+
+### 0-5. 이 장의 접근
+
+외우려 하지 말고 **"이 패턴이 해결하는 문제가 뭔가"** 를 중심으로 읽는다. 코드 구조는 한 번 보면 기억 나지만, 문제 인식이 없으면 실전에서 못 꺼낸다.
+
+### 0-6. 6단계의 위치
+
+6단계는 **"개별 코드가 아니라 시스템 설계"** 를 다루는 단계.
+
+- 6-1 (지금): 코드 수준의 재사용 패턴
+- 6-2: 설계 원칙 (SOLID 등)
+- 6-3: 아키텍처 수준 패턴 (MVC, Clean Architecture)
+- 6-4: 함수형 프로그래밍
+- 6-5~6-7: 테스팅, Git, CI/CD
+
+이 단계를 지나면 **"동작하는 코드"** 에서 **"유지보수 가능한 시스템"** 으로 사고가 확장된다.
+
+---
+
+## 1. 디자인 패턴이란
+
+> **반복해서 나타나는 설계 문제에 대한 검증된 해결책의 이름.**
+
+1994년 GoF(Gang of Four)의 *Design Patterns* 책이 23개 패턴을 정리했다. 이후 40년 가까이 업계 공용어가 되었다.
+
+### 왜 이름이 중요한가
+
+- **리뷰 코멘트에서 "여긴 Observer로 빼죠"** 한 마디가 긴 설명을 대체한다
+- **설계 의도를 공유**할 수 있다
+- **구현은 달라도 구조는 같음**을 인식할 수 있다
+
+⚠️ **패턴에 코드를 끼워 맞추지 말 것**. 패턴은 문제에서 출발한다. "이 문제가 익숙한데" → "Strategy 패턴이 맞겠다"가 올바른 순서다.
+
+---
+
+## 2. Observer / Pub-Sub
+
+### 2-1. 구조
+
+Subject가 상태 변경 시 등록된 Observer들에게 **자동 통지**한다.
+
+```
+Subject ──notify──▶ Observer A
+         ──notify──▶ Observer B
+         ──notify──▶ Observer C
+```
+
+### 2-2. JS 구현
+
+```js
+class EventEmitter {
+  #listeners = new Map();
+
+  on(event, fn) {
+    if (!this.#listeners.has(event)) this.#listeners.set(event, new Set());
+    this.#listeners.get(event).add(fn);
+    return () => this.off(event, fn); // unsubscribe 반환
+  }
+
+  off(event, fn) {
+    this.#listeners.get(event)?.delete(fn);
+  }
+
+  emit(event, ...args) {
+    this.#listeners.get(event)?.forEach(fn => fn(...args));
+  }
+}
+
+const bus = new EventEmitter();
+const unsubscribe = bus.on('login', user => console.log(user.name));
+bus.emit('login', { name: 'Alice' });
+unsubscribe();
+```
+
+### 2-3. Observer vs Pub-Sub
+
+| 항목 | Observer | Pub-Sub |
+|------|----------|---------|
+| 결합도 | Subject가 Observer를 직접 앎 | 중간 Broker를 통해 느슨하게 연결 |
+| 예시 | DOM 이벤트 리스너 | Redis Pub/Sub, Event Bus |
+
+### 2-4. FE 실전
+
+- **DOM 이벤트**: `addEventListener`
+- **Redux** `store.subscribe(listener)`
+- **RxJS** Observable / Subject
+- **Vue 반응성** (내부적으로 dep ↔ effect 관계)
+- **React `useSyncExternalStore`** — 외부 스토어 구독
+
+### 2-5. 함정
+
+- **메모리 누수** — unsubscribe 빠뜨리면 리스너가 영원히 쌓인다
+- **통지 순서 의존** — 여러 Observer 간 실행 순서에 의존하지 말 것
+- **동기 통지의 긴 체인** — A가 B를 업데이트 → B가 C 업데이트 → 무한 루프
+
+---
+
+## 3. Singleton
+
+### 3-1. 구조
+
+클래스 인스턴스가 **정확히 하나**만 존재함을 보장.
+
+```js
+class Logger {
+  static #instance;
+
+  static getInstance() {
+    if (!Logger.#instance) Logger.#instance = new Logger();
+    return Logger.#instance;
+  }
+
+  log(msg) { console.log(msg); }
+}
+
+const a = Logger.getInstance();
+const b = Logger.getInstance();
+console.log(a === b); // true
+```
+
+### 3-2. JS 세계의 진짜 싱글톤: ES 모듈
+
+```js
+// counter.js
+let count = 0;
+export const inc = () => ++count;
+export const get = () => count;
+```
+
+**모듈은 첫 import 시 한 번만 평가**되고 캐시된다. 별도 싱글톤 패턴이 거의 필요 없다.
+
+### 3-3. 조심해야 할 이유
+
+- **전역 상태 = 테스트 어려움** (테스트 간 상태 오염)
+- **의존성 숨김** — 함수 시그니처에 드러나지 않는 의존성
+- **병렬/멀티 인스턴스 확장성 저하**
+
+⚠️ **실무 가이드**: 로거, 설정 객체, DB 커넥션 풀처럼 **명백히 하나여야 하는 리소스**에만. 비즈니스 로직을 싱글톤에 담지 말 것.
+
+---
+
+## 4. Factory
+
+### 4-1. 구조
+
+객체 생성 로직을 **별도 함수/클래스로 캡슐화**. 호출자는 "무엇을 만들지"만 지정, 생성 세부는 모름.
+
+```js
+function createApiClient({ env, timeout = 5000 } = {}) {
+  const baseURL = {
+    dev: 'http://localhost:3000',
+    staging: 'https://staging.api.com',
+    prod: 'https://api.com',
+  }[env];
+
+  return {
+    get: (path) => fetch(`${baseURL}${path}`, { signal: AbortSignal.timeout(timeout) }),
+    post: (path, body) => fetch(`${baseURL}${path}`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(timeout),
+    }),
+  };
+}
+
+const api = createApiClient({ env: 'prod' });
+```
+
+### 4-2. Abstract Factory (제품군 생성)
+
+테마별 UI 세트 전체를 생성:
+
+```js
+const lightTheme = {
+  Button: LightButton,
+  Input: LightInput,
+  Dialog: LightDialog,
+};
+
+const darkTheme = {
+  Button: DarkButton,
+  Input: DarkInput,
+  Dialog: DarkDialog,
+};
+
+function getTheme(mode) {
+  return mode === 'dark' ? darkTheme : lightTheme;
+}
+```
+
+### 4-3. FE 실전
+
+- **API 클라이언트 생성 함수**
+- **React `createContext` + Provider**
+- **Redux `createSlice`**
+- **테스트에서 `createMockUser({ overrides })` 같은 Fixture 팩토리**
+
+---
+
+## 5. Strategy
+
+### 5-1. 구조
+
+같은 목적의 **여러 알고리즘을 교체 가능한 객체로 캡슐화**. 호출자는 상황에 따라 바꿔 꽂는다.
+
+```js
+const sortStrategies = {
+  latest: (a, b) => b.createdAt - a.createdAt,
+  popular: (a, b) => b.likes - a.likes,
+  alphabetical: (a, b) => a.title.localeCompare(b.title),
+};
+
+function sortPosts(posts, strategy) {
+  return [...posts].sort(sortStrategies[strategy]);
+}
+
+sortPosts(posts, 'latest');
+```
+
+### 5-2. React 컴포넌트에서
+
+```jsx
+const validators = {
+  email: (v) => /^[^@]+@[^@]+$/.test(v) || '이메일 형식',
+  phone: (v) => /^\d{3}-\d{4}-\d{4}$/.test(v) || '전화번호 형식',
+  required: (v) => !!v || '필수',
+};
+
+function Input({ name, value, onChange, rules = [] }) {
+  const errors = rules.map(rule => validators[rule](value)).filter(e => e !== true);
+  return (
+    <>
+      <input name={name} value={value} onChange={onChange} />
+      {errors.map(e => <span key={e}>{e}</span>)}
+    </>
+  );
+}
+
+<Input name="email" rules={['required', 'email']} />
+```
+
+### 5-3. FE 실전
+
+- **정렬 기준**, **폼 검증**, **결제 수단별 처리**
+- **이미지 리사이즈 알고리즘 선택** (nearest, bilinear 등)
+- **라우터 가드의 인증 전략 교체**
+
+### 5-4. if-else 체인과의 차이
+
+```js
+// ❌ Strategy가 필요한 if-else
+function handlePayment(type, amount) {
+  if (type === 'card') { /* 카드 결제 */ }
+  else if (type === 'bank') { /* 계좌 이체 */ }
+  else if (type === 'crypto') { /* 암호화폐 */ }
+  // 새 결제 수단 추가 시 이 함수 수정 필요 → OCP 위반
+}
+
+// ✅ Strategy
+const payments = {
+  card: (amount) => { /* ... */ },
+  bank: (amount) => { /* ... */ },
+  crypto: (amount) => { /* ... */ },
+};
+
+function handlePayment(type, amount) {
+  const strategy = payments[type];
+  if (!strategy) throw new Error(`Unknown: ${type}`);
+  return strategy(amount);
+}
+
+// 새 수단 추가: payments.paypal = ... 만 등록하면 됨
+```
+
+---
+
+## 6. Command
+
+### 6-1. 구조
+
+요청(호출)을 **객체로 캡슐화**. 지연 실행·큐잉·undo·로깅이 쉬워진다.
+
+```js
+class Command {
+  execute() { throw new Error('must implement'); }
+  undo() { throw new Error('must implement'); }
+}
+
+class AddTodoCommand extends Command {
+  constructor(store, todo) { super(); this.store = store; this.todo = todo; }
+  execute() { this.store.add(this.todo); }
+  undo() { this.store.remove(this.todo.id); }
+}
+
+class CommandHistory {
+  #stack = [];
+  #redo = [];
+
+  execute(cmd) {
+    cmd.execute();
+    this.#stack.push(cmd);
+    this.#redo = [];
+  }
+  undo() { const cmd = this.#stack.pop(); cmd?.undo(); if (cmd) this.#redo.push(cmd); }
+  redo() { const cmd = this.#redo.pop(); cmd?.execute(); if (cmd) this.#stack.push(cmd); }
+}
+```
+
+### 6-2. FE 실전
+
+- **Redux Action** — `{ type: 'todo/add', payload: ... }`은 Command 객체다
+- **Undo/Redo 스택** (에디터, 드로잉 툴)
+- **Command Palette** (VS Code의 Cmd+Shift+P)
+- **Macro 녹화/재생**
+
+### 6-3. Redux가 Command인 이유
+
+```js
+// Action = Command 객체
+const action = { type: 'todo/add', payload: { id: 1, text: 'buy milk' } };
+
+// Reducer = execute 로직
+function todoReducer(state, action) {
+  switch (action.type) {
+    case 'todo/add': return [...state, action.payload];
+  }
+}
+```
+
+Action을 **직렬화·저장·리플레이**할 수 있어 Time-travel Debugging이 가능하다.
+
+---
+
+## 7. Proxy
+
+### 7-1. 구조
+
+객체 접근을 **가로채 부가 동작을 삽입**. JS는 `Proxy` 빌트인 지원.
+
+```js
+const user = { name: 'Alice', age: 30 };
+
+const logged = new Proxy(user, {
+  get(target, key) {
+    console.log(`GET ${key}`);
+    return Reflect.get(target, key);
+  },
+  set(target, key, value) {
+    console.log(`SET ${key} = ${value}`);
+    return Reflect.set(target, key, value);
+  },
+});
+
+logged.name;          // GET name
+logged.age = 31;      // SET age = 31
+```
+
+### 7-2. FE 실전
+
+- **Vue 3 Reactivity** — `reactive(obj)` 내부가 Proxy
+- **MobX** 관찰 가능한 객체
+- **API mocking** — fetch Proxy로 개발 중 가짜 응답
+- **Immer** — 원본을 변경하는 것처럼 쓰면 불변 복사본 생성
+- **검증 래퍼** — set 시 schema 검증
+
+### 7-3. 성능 주의
+
+Proxy 통한 접근은 직접 접근보다 **느리다** (가로채기 오버헤드). 핫 루프에서 Proxy 남용 금지.
+
+---
+
+## 8. Decorator
+
+### 8-1. 구조
+
+객체 **기능을 동적으로 확장**한다. 상속 대신 "감싸기"로 조합.
+
+### 8-2. 함수 데코레이터 (고차 함수)
+
+```js
+function withLogging(fn) {
+  return function (...args) {
+    console.log(`[call] ${fn.name}(${args.join(', ')})`);
+    const result = fn.apply(this, args);
+    console.log(`[return] ${result}`);
+    return result;
+  };
+}
+
+function withTiming(fn) {
+  return function (...args) {
+    const start = performance.now();
+    const result = fn.apply(this, args);
+    console.log(`${fn.name}: ${performance.now() - start}ms`);
+    return result;
+  };
+}
+
+const enhanced = withLogging(withTiming(computeHeavy));
+```
+
+### 8-3. React HOC (Higher-Order Component)
+
+```jsx
+function withAuth(Component) {
+  return function AuthWrapped(props) {
+    const user = useAuth();
+    if (!user) return <Navigate to="/login" />;
+    return <Component {...props} user={user} />;
+  };
+}
+
+const ProtectedPage = withAuth(Dashboard);
+```
+
+**주의**: 최신 React에서는 HOC보다 **커스텀 훅**이 선호된다. HOC는 wrapper hell·prop 충돌 등 단점이 있다.
+
+### 8-4. Express 미들웨어도 Decorator
+
+```js
+app.use(logger);
+app.use(authenticate);
+app.use(cors);
+app.get('/users', handler); // 요청이 logger → authenticate → cors → handler 순서로 감싸짐
+```
+
+---
+
+## 9. Adapter
+
+### 9-1. 구조
+
+호환되지 않는 인터페이스끼리 연결.
+
+```js
+// 새 API는 camelCase, 서드파티는 snake_case
+function userAdapter(apiResponse) {
+  return {
+    id: apiResponse.user_id,
+    firstName: apiResponse.first_name,
+    lastName: apiResponse.last_name,
+    createdAt: new Date(apiResponse.created_at),
+  };
+}
+
+const user = userAdapter(await fetch('/legacy-api').then(r => r.json()));
+```
+
+### 9-2. FE 실전
+
+- **서드파티 SDK 래핑** — Firebase → 내부 인터페이스
+- **레거시 API 마이그레이션 계층**
+- **여러 결제사 SDK를 단일 인터페이스로**
+
+---
+
+## 10. Facade
+
+### 10-1. 구조
+
+복잡한 서브시스템을 **단순한 고수준 API**로 래핑.
+
+```js
+// 내부적으로는 여러 API 호출, 에러 처리, 캐싱 등 복잡
+class UserService {
+  async getFullProfile(userId) {
+    const [user, orders, preferences] = await Promise.all([
+      this.#api.get(`/users/${userId}`),
+      this.#api.get(`/users/${userId}/orders`),
+      this.#api.get(`/users/${userId}/preferences`),
+    ]);
+    return { ...user, orders, preferences };
+  }
+}
+
+// 호출자
+const profile = await userService.getFullProfile(123);
+```
+
+### 10-2. Adapter vs Facade
+
+| 패턴 | 목적 |
+|------|------|
+| Adapter | 인터페이스 **호환** |
+| Facade | 인터페이스 **단순화** |
+
+같이 쓸 때도 많다. Adapter로 호환성 맞춘 뒤 Facade로 단순화.
+
+---
+
+## 11. Module
+
+### 11-1. 구조
+
+관련 기능을 묶고 **private 영역을 유지**한다.
+
+### 11-2. IIFE (과거 방식)
+
+```js
+const Counter = (function() {
+  let count = 0; // private
+  return {
+    inc: () => ++count,
+    get: () => count,
+  };
+})();
+```
+
+### 11-3. ES Modules (현재)
+
+```js
+// counter.js
+let count = 0; // 외부에서 접근 불가
+export const inc = () => ++count;
+export const get = () => count;
+```
+
+---
+
+## 12. State 패턴과 FSM
+
+### 12-1. 문제
+
+컴포넌트 상태를 여러 boolean으로 관리하면 **불가능한 조합**이 생긴다.
+
+```js
+// 7가지 의미 없는 조합 발생 가능
+const [isLoading, setIsLoading] = useState(false);
+const [isError, setIsError] = useState(false);
+const [isSuccess, setIsSuccess] = useState(false);
+// isLoading && isError ???
+```
+
+### 12-2. Discriminated Union
+
+```ts
+type State =
+  | { status: 'idle' }
+  | { status: 'loading' }
+  | { status: 'success'; data: User }
+  | { status: 'error'; error: Error };
+
+function reducer(state: State, action): State {
+  switch (action.type) {
+    case 'FETCH':   return { status: 'loading' };
+    case 'SUCCESS': return { status: 'success', data: action.data };
+    case 'FAILURE': return { status: 'error', error: action.error };
+  }
+}
+```
+
+### 12-3. XState
+
+명시적 유한 상태 기계로 상태 전이를 선언.
+
+```js
+import { createMachine } from 'xstate';
+
+const fetchMachine = createMachine({
+  initial: 'idle',
+  states: {
+    idle: { on: { FETCH: 'loading' } },
+    loading: { on: { SUCCESS: 'success', FAILURE: 'error' } },
+    success: { on: { REFETCH: 'loading' } },
+    error: { on: { RETRY: 'loading' } },
+  },
+});
+```
+
+불가능한 상태 조합 자체를 **타입 시스템 + 상태 기계**가 막는다. 복잡한 워크플로우(결제, 비디오 플레이어, 폼 마법사)에 강력하다.
+
+---
+
+## 13. 패턴 사용의 함정
+
+### 13-1. 과잉 설계 (Pattern Fever)
+
+```js
+// ❌ 4줄이면 되는 것에 Strategy + Factory + Observer 조합
+class UserNameFormatterFactory {
+  createFormatter(strategy) { /* ... */ }
+}
+// ...
+
+// ✅
+function formatName(user) {
+  return `${user.firstName} ${user.lastName}`;
+}
+```
+
+**지금 필요하지 않은 확장성은 짐이다**. YAGNI (You Aren't Gonna Need It).
+
+### 13-2. 패턴 이름 오용
+
+"이거 Observer 패턴이에요"라고 말하려면 정말 Observer 구조인지 확인. 단순 콜백 ≠ Observer.
+
+### 13-3. 패턴이 언어 특성을 이기지 못한다
+
+GoF 책은 C++ 기반이라 JS에는 **너무 무거운 패턴**이 많다 (Abstract Factory, Builder 등). JS는 1급 함수, 구조적 타이핑, 동적 객체 조립이 쉬워 상당수 패턴을 **짧은 함수로 대체**한다.
+
+---
+
+## 14. 실무 체크리스트
+
+- [ ] Observer 구독은 cleanup(언마운트 시 unsubscribe)되는가
+- [ ] 싱글톤은 정말 필요한 경우인가 (테스트 가능성 저하를 감수할 가치?)
+- [ ] 분기 3개 이상 쌓이기 시작하면 Strategy 패턴 검토하는가
+- [ ] Redux/Pinia 설계가 Command 관점과 맞는가 (직렬화 가능, 의도 표현)
+- [ ] Proxy 기반 반응성 라이브러리의 **destructuring 함정**을 아는가
+- [ ] HOC 대신 훅으로 대체 가능한가
+- [ ] 불가능한 상태 조합을 State 패턴으로 제거했는가
+- [ ] 패턴 이름으로 리뷰 코멘트를 쓸 수 있는가
+
+---
+
+## 15. 연습 문제
+
+**Q1.** Observer 패턴에서 메모리 누수가 발생하는 흔한 시나리오와 해결법을 설명하라.
+
+<details>
+<summary>정답</summary>
+
+React 컴포넌트가 마운트될 때 외부 스토어·이벤트 버스·WebSocket에 `subscribe`하고, **unmount 시 `unsubscribe`를 잊으면** 컴포넌트가 언마운트된 뒤에도 리스너가 남아 있다. 리스너가 컴포넌트의 state·props를 클로저로 참조하고 있으므로 **가비지 컬렉션되지 않는다**.
+
+해결: `useEffect`의 cleanup 함수로 unsubscribe를 반환.
+```jsx
+useEffect(() => {
+  const unsub = store.subscribe(handler);
+  return () => unsub();
+}, []);
+```
+또는 `AbortController` 기반 패턴 사용.
+
+</details>
+
+**Q2.** 결제 수단이 3개 있고 곧 5개 더 추가될 예정이다. 어떤 패턴을 적용하고 왜 그런가?
+
+<details>
+<summary>정답</summary>
+
+**Strategy 패턴**. 이유:
+1. **OCP (개방-폐쇄 원칙)**: 새 수단 추가 시 기존 코드(if-else 체인) 수정 없이 **새 strategy 등록만** 하면 됨.
+2. **테스트 용이성**: 각 수단을 독립적으로 테스트 가능.
+3. **런타임 선택**: 사용자 국가·환경·약정 상태 등에 따라 사용 가능한 수단 목록을 동적으로 필터링 가능.
+
+구현: `{ card: processCard, bank: processBank, ... }` 형태의 객체 매핑이 JS에서 가장 간결하고 실용적이다.
+
+</details>
+
+**Q3.** Singleton이 테스트를 어렵게 만드는 이유를 구체적으로 설명하라.
+
+<details>
+<summary>정답</summary>
+
+1. **테스트 간 상태 공유**: Singleton은 모듈 로드 시 1번만 생성되고 모든 테스트가 같은 인스턴스를 쓴다. 앞 테스트가 바꾼 상태가 뒷 테스트에 영향 → **테스트 순서 의존성** 발생.
+2. **Mock 주입 어려움**: 함수 시그니처에 의존성이 드러나지 않아(숨은 전역) Jest 모듈 mocking 같은 특수 기법이 필요.
+3. **병렬 실행 부작용**: 여러 테스트가 같은 Singleton을 동시에 쓰면 race condition.
+
+대안: **DI(의존성 주입)**. 필요한 객체를 함수 인자나 Context로 전달하면 테스트에서 가짜를 쉽게 넣을 수 있다.
+
+</details>
+
+**Q4.** React HOC와 Custom Hook을 비교하고, 어떤 경우 HOC가 여전히 유효한지 들어보라.
+
+<details>
+<summary>정답</summary>
+
+HOC는 컴포넌트를 감싸 새 컴포넌트를 반환하고, Hook은 컴포넌트 내부에서 호출해 값·동작을 받는다.
+
+**Hook이 일반적으로 선호**되는 이유:
+- 중첩 없음 (wrapper hell 회피)
+- prop 네임 충돌 없음
+- 컴파일러가 의존성·동작을 더 잘 추론
+- TypeScript 시그니처가 깔끔
+
+**HOC가 여전히 유효한 경우**:
+- **컴포넌트 외부에서 동작 추가**: 예컨대 error boundary로 감싸기 (`withErrorBoundary`).
+- **정적 타입/정적 분석 대상**: Next.js `getServerSideProps`처럼 **컴포넌트 외부에 메타 정보**가 붙어야 할 때.
+- **라우터 단위 가드**: `withAuth`처럼 컴포넌트 전체 교체(Redirect) 로직.
+
+대부분은 Hook + 얇은 Wrapper로 대체 가능하다.
+
+</details>
+
+**Q5.** State 패턴(Discriminated Union / XState)을 여러 boolean 플래그 방식 대비 어떤 문제를 해결하는가?
+
+<details>
+<summary>정답</summary>
+
+3개 boolean(`isLoading`, `isError`, `isSuccess`)은 **2³ = 8가지 조합**을 만든다. 그중 의미 있는 건 4가지(idle/loading/error/success) 뿐이고 나머지 4가지(`isLoading && isError` 등)는 **버그다**.
+
+Discriminated Union은 **타입 시스템이 불가능한 조합을 금지**한다. XState는 **상태 간 전이 규칙**까지 선언해, "loading에서만 success로 갈 수 있다"는 비즈니스 규칙을 강제한다. 결과적으로 "로딩 중인데 에러도 표시되는" 희귀 버그를 원천 차단.
+
+</details>
+
+**Q6.** Proxy 기반 반응성(Vue의 `reactive`, MobX)에서 자주 마주치는 "반응성이 끊어지는" 상황을 들어라.
+
+<details>
+<summary>정답</summary>
+
+1. **Destructuring**: `const { name } = state.user`는 그 순간의 값을 복사해 뺀 것이라 이후 변경을 감지 못한다. 해결: `toRefs`(Vue) 또는 getter 유지.
+2. **원시 값을 직접 보관**: `reactive("hello")` 불가. 원시 값은 `ref`(Vue) 등으로 래핑.
+3. **Map/Set의 특정 연산**: 일부 라이브러리는 Map/Set 변경 감지에 별도 구현이 필요했다 (Vue 3는 지원).
+4. **`Object.freeze`된 객체** 또는 Proxy 밖에서 참조 대체: `state = newObject` 형태로 통째 교체하면 기존 Proxy를 잃음.
+
+</details>
+
+**Q7.** 다음 코드의 문제를 Command 패턴 관점에서 개선하라.
+```js
+function handleClick() {
+  dispatch({ type: 'ADD_TODO', text });
+  saveToServer(text);
+  analytics.track('todo_added', { text });
+}
+```
+
+<details>
+<summary>정답</summary>
+
+현재는 **한 함수가 3가지 부수 효과**(store, 서버, 애널리틱스)를 **명령형**으로 섞어 호출한다. Undo, 재시도, 로깅 통합이 어렵다.
+
+개선: 각 효과를 Command로 캡슐화하고, **Middleware나 Saga**에서 일관되게 처리.
+
+```js
+function handleClick() {
+  dispatch(addTodo(text)); // Command 하나만 발행
+}
+
+// middleware
+const todoMiddleware = store => next => action => {
+  const result = next(action);
+  if (action.type === 'ADD_TODO') {
+    saveToServer(action.payload.text);
+    analytics.track('todo_added', action.payload);
+  }
+  return result;
+};
+```
+장점: 테스트에서 미들웨어만 분리해 검증, 실패 재시도 일괄 적용, 이벤트 로그로 재현 가능.
+
+</details>
+
+---
+
+## 16. 정리
+
+- 디자인 패턴은 **문제→해결책의 이름표**다. 외우지 말고 상황에 매칭하는 감을 기른다.
+- **Observer/Pub-Sub**은 이벤트·반응성의 뼈대다.
+- **Singleton**은 조심스럽게만 쓴다. JS 모듈이 사실상 싱글톤이다.
+- **Factory / Strategy**는 분기를 제거하고 확장성을 제공한다.
+- **Command**는 동작을 데이터로 만들어 큐잉·undo·재생을 가능케 한다.
+- **Proxy**는 Vue/MobX의 반응성과 각종 메타 프로그래밍 기반이다.
+- **Decorator**는 상속 대신 조합으로 기능을 확장한다. HOC ≈ 컴포넌트 데코레이터.
+- **State 패턴 / Discriminated Union**은 불가능한 상태 조합을 원천 차단한다.
+- **패턴 남용은 그 자체로 안티패턴**이다. YAGNI.
+
+---
+
+[← 5-8. 기타 꼭 알아야 할 것들](5단계-8-기타-꼭-알아야-할-것들) | [6-2. 설계 원칙 →](6단계-2-설계-원칙)

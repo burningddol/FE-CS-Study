@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><title>Inputs</title>
+<link rel="stylesheet" href="../colors_and_type.css"><link rel="stylesheet" href="../tokens.css">
+<style>body{margin:0;padding:20px;background:var(--bg);font-family:var(--font-sans);display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.f{display:flex;flex-direction:column;gap:4px}
+label{font-size:12px;font-weight:600;color:var(--fg-muted)}
+.inp{padding:10px 12px;border:1px solid #E8E8EC;border-radius:10px;font:inherit;font-size:14px;color:var(--fg);background:#fff;outline:none;transition:all .12s}
+.inp:focus{border-color:#4F46E5;box-shadow:0 0 0 3px rgba(79,70,229,.15)}
+.inp.err{border-color:#EF4444}
+.hint{font-size:12px;color:var(--fg-subtle)}
+.err-t{font-size:12px;color:#DC2626}
+.search{position:relative}
+.search svg{position:absolute;left:12px;top:50%;transform:translateY(-50%);width:16px;height:16px;stroke:#71717A;stroke-width:2;fill:none}
+.search input{padding-left:36px}</style></head><body>
+<div class="f"><label>이메일</label><input class="inp" placeholder="you@example.com"/><span class="hint">로그인할 때 사용해요</span></div>
+<div class="f"><label>비밀번호</label><input class="inp err" type="password" value="••••"/><span class="err-t">8자 이상 입력해주세요</span></div>
+<div class="f"><label>검색</label><div class="search"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.3-4.3"/></svg><input class="inp" style="width:100%;box-sizing:border-box" placeholder="강의 검색..."/></div></div>
+<div class="f"><label>닉네임</label><input class="inp" value="준석" readonly style="background:#FAFAFA;color:#71717A"/><span class="hint">프로필에서 변경 가능</span></div>
+</body></html>

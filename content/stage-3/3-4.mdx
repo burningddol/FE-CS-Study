@@ -1,0 +1,508 @@
+
+> **목표**: **CPU 캐시 계층, 지역성 원리, V8 Hidden Class/Inline Cache, TurboFan 최적화** 를 이해하고 "같은 알고리즘도 왜 실행 속도가 다른지"를 설명할 수 있어야 한다.
+
+---
+
+## 0. CPU 캐시가 뭔데 — 초심자용
+
+### 0-1. "메모리가 빠르다"는 거짓말
+
+[3-3](3단계-3-메모리-관리.md)에서 "RAM은 디스크보다 빠르다"고 했다. 맞다. 하지만 **CPU 입장에서는 RAM도 아주 느리다.**
+
+- CPU 연산 1회: **0.3 나노초**
+- RAM 읽기: **100 나노초**
+
+RAM 한 번 기다리는 동안 CPU는 **300번** 연산할 수 있다. **즉 CPU는 대부분의 시간을 "메모리 기다리며" 보낸다.**
+
+### 0-2. 그래서 "캐시"가 만들어졌다
+
+CPU 옆에 **아주 작고 아주 빠른 메모리**를 여러 층 붙였다. 이게 **L1, L2, L3 캐시**.
+
+```
+CPU ← L1 (1ns) ← L2 (4ns) ← L3 (10ns) ← RAM (100ns) ← SSD (100,000ns)
+         ↑ 작지만 바로 옆      ↑ 공유      ↑ 멀리 있음
+```
+
+자주 쓰는 데이터를 캐시에 두면, RAM까지 갈 일이 줄어든다. **캐시에 있으면 히트(hit), 없어서 RAM까지 가면 미스(miss).**
+
+### 0-3. 프론트 개발자가 이걸 왜 알아야 하나
+
+"웹 개발이면 어차피 JS 런타임 위에서 도는데, CPU 캐시까지 알아야 하나?"
+
+답: **똑같은 JS 코드도 캐시를 타느냐에 따라 10배까지 차이난다.**
+
+```js
+// A: 빠름 (캐시 친화적)
+for (let i = 0; i < arr.length; i++) sum += arr[i];
+
+// B: 느림 (캐시 비친화적)
+for (let i = 0; i < arr.length; i++) sum += arr[(i * 997) % arr.length];
+```
+
+알고리즘 복잡도는 같은 O(n)인데, B가 훨씬 느리다. **왜?** → 이 장에서 답함.
+
+또한 V8 엔진은 Hidden Class / Inline Cache 같은 **JS 전용 캐시 최적화**를 한다. 객체 shape을 중간에 바꾸면 이 최적화가 무효화된다. 고성능 JS 코드를 짜려면 이 메커니즘을 알아야 한다.
+
+### 0-4. 이 장의 핵심 아이디어
+
+**"데이터를 연속해서, 순서대로 접근하라."** 이 한 문장에 거의 모든 것이 담겨있다. 왜 그런지를 풀어 설명하는 장이다.
+
+---
+
+## 1. 메모리 계층
+
+```
+          속도(접근 시간)          크기
+Register  < 1 ns               수 KB
+L1 Cache  ~1 ns                32~64 KB
+L2 Cache  ~4 ns                256 KB ~ 1 MB
+L3 Cache  ~10 ns               수~수십 MB (코어 공유)
+DRAM      ~100 ns              수 GB
+SSD       ~100 µs              수 TB
+HDD       ~10 ms               수 TB
+네트워크    ~수십 ms             ∞
+```
+
+**L1 → DRAM 속도 차이 ≈ 100배**. 캐시 미스가 얼마나 비싼지 실감해야 한다.
+
+---
+
+## 2. 지역성 (Locality)
+
+캐시가 잘 작동하려면 프로그램이 **지역성** 을 만족해야 한다.
+
+### 시간 지역성 (Temporal)
+
+**최근에 접근한 메모리는 곧 다시 접근될 가능성이 높다**.
+
+```js
+for (let i = 0; i < n; i++) {
+  sum += arr[i]; // sum을 매번 접근 → 캐시 히트
+}
+```
+
+### 공간 지역성 (Spatial)
+
+**접근한 메모리 근처도 곧 접근될 가능성이 높다**.
+
+```js
+for (let i = 0; i < n; i++) {
+  sum += arr[i]; // arr[0], arr[1]... 연속 접근
+}
+```
+
+캐시는 **캐시 라인(보통 64바이트)** 단위로 로드 → `arr[0]` 로드 시 `arr[1..15]` (8바이트 × 8) 도 함께 로드됨.
+
+---
+
+## 3. 캐시 친화적 코드 예
+
+### 2D 배열 순회
+
+```c
+// 행 우선 저장인 C/C++
+int arr[1000][1000];
+
+// 좋음 — 공간 지역성
+for (int i = 0; i < 1000; i++)
+  for (int j = 0; j < 1000; j++)
+    sum += arr[i][j];
+
+// 나쁨 — 매 iteration이 다른 캐시 라인
+for (int j = 0; j < 1000; j++)
+  for (int i = 0; i < 1000; i++)
+    sum += arr[i][j];
+```
+
+두 번째 버전은 캐시 미스 비율이 수십 배 높아 **10배 이상 느릴 수 있다**.
+
+### JS의 경우
+
+JS 배열은 V8 내부적으로 두 가지 표현:
+- **Packed Elements** (구멍 없는 동질 배열) — C 배열과 유사, 캐시 친화적
+- **Holey / Dictionary Mode** — 해시 맵 비슷, 캐시 비친화적
+
+```js
+const arr = [1, 2, 3];        // PACKED_SMI_ELEMENTS (가장 빠름)
+arr[100] = 4;                 // HOLEY_SMI_ELEMENTS (구멍)
+arr[50] = 'x';                // PACKED_ELEMENTS → HOLEY_ELEMENTS (타입 혼재)
+delete arr[0];                // → HOLEY_ELEMENTS
+// 빈번한 delete나 sparse 인덱싱은 Dictionary Mode로 격하
+```
+
+### 규칙
+
+- 배열 크기는 미리 정하거나 `.push` 로 순차 추가
+- 배열 중간에 `delete` 쓰지 말고 `splice` 나 sentinel 값
+- 동질 타입 유지 (숫자 배열에 문자열 섞지 말기)
+
+---
+
+## 4. CPU 파이프라인과 분기 예측
+
+현대 CPU는 **파이프라인** 으로 명령어를 중첩 실행한다 (5~20단계).
+
+### 분기 (branch)
+
+```c
+if (x > 0) foo();
+else       bar();
+```
+
+- CPU는 다음 명령어를 **예측해서 미리 가져옴**
+- 예측 실패 시 파이프라인 **flush** → 수십 사이클 낭비
+
+### 분기 예측 실패의 비용 — 실험
+
+```c
+// 정렬된 배열
+for (int i = 0; i < N; i++)
+  if (data[i] > 128) sum += data[i];
+
+// 정렬 안 된 배열 — 같은 로직인데 3~6배 느림
+```
+
+이유: 정렬된 배열은 `if` 결과가 일관되게 예측되지만, 랜덤이면 절반 가까이 예측 실패.
+
+### JS에서의 분기 예측
+
+JIT가 런타임에 바이트코드 → 네이티브 컴파일 → 실제 CPU가 예측. 패턴 있는 데이터가 훨씬 빠름.
+
+---
+
+## 5. SIMD (Single Instruction Multiple Data)
+
+**한 명령어로 여러 데이터에 동시 연산**.
+
+### 예
+
+```
+SSE/AVX:  4~8개의 float을 한 번에 덧셈
+```
+
+### JS
+
+- V8은 일부 경우 자동 벡터화
+- WebAssembly SIMD (`v128.add`) 로 명시적 사용 가능
+- 이미지/오디오 처리, 물리 엔진에 큰 효과
+
+---
+
+## 6. V8의 내부 — 한 번은 봐야 할 최적화
+
+### JIT 파이프라인
+
+```
+JS Source
+    ↓
+Parser → AST
+    ↓
+Ignition (Interpreter) — 빠른 시작
+    ↓  (warm-up 후)
+Sparkplug (Baseline JIT, V8 9.1+) — 중간 계층
+    ↓
+TurboFan (Optimizing Compiler) — 최적 코드
+    ↓  (타입 가정 깨지면)
+Deoptimization → Ignition 으로 복귀
+```
+
+### Hidden Class (Shape / Map)
+
+V8은 객체의 "모양"을 저장해 빠른 속성 접근을 달성.
+
+```js
+const a = {};
+a.x = 1; // Shape 1: {x}
+a.y = 2; // Shape 2: {x, y}
+
+const b = {};
+b.x = 1; // Shape 1과 같음
+b.y = 2; // Shape 2와 같음 → a와 b는 같은 hidden class
+```
+
+### Inline Cache (IC)
+
+같은 hidden class의 객체에 반복 접근하면 **속성 주소를 캐시** → O(1) 접근.
+
+```js
+function getX(obj) { return obj.x; }
+
+// 호출 1: hidden class 확인, x의 오프셋 캐시
+// 호출 2~∞: 같은 hidden class면 바로 오프셋으로 접근 (monomorphic, 가장 빠름)
+```
+
+### IC 상태
+
+| 상태 | 의미 | 성능 |
+|------|------|------|
+| **Monomorphic** | 1개 shape | 가장 빠름 |
+| **Polymorphic** | 2~4개 shape | 빠름 |
+| **Megamorphic** | 5개+ shape | 느림 (테이블 lookup) |
+
+---
+
+## 7. hidden class를 깨는 실수
+
+### ① 속성 순서가 다름
+
+```js
+const a = {x: 1, y: 2}; // Shape A: x→y
+const b = {y: 2, x: 1}; // Shape B: y→x
+// 같은 속성이지만 다른 hidden class
+```
+
+### ② 나중에 추가/삭제
+
+```js
+const p = {x: 0, y: 0}; // Shape: x, y
+p.z = 1;                // Shape: x, y, z
+delete p.x;             // Dictionary Mode (느려짐)
+```
+
+### ③ 여러 shape의 객체를 한 함수에 흘려보냄
+
+```js
+function getArea(obj) { return obj.w * obj.h; }
+
+getArea({w: 10, h: 5});              // Shape A
+getArea({name: 'x', w: 10, h: 5});   // Shape B → Polymorphic
+getArea({label: 'y', w: 10, h: 5});  // Shape C → Megamorphic
+```
+
+### 해결
+
+- 생성자/클래스로 **일관된 shape** 생성
+- 모든 필드를 생성자에서 **같은 순서로** 초기화
+- `undefined` 라도 속성을 미리 둠
+
+```js
+class Box {
+  constructor() {
+    this.x = 0;
+    this.y = 0;
+    this.w = 0;
+    this.h = 0;
+  }
+}
+```
+
+---
+
+## 8. 숫자 타입 — Smi vs HeapNumber
+
+- **Smi (Small Integer)**: 31-bit int, 태그로 즉시 표현 → 힙 할당 없음
+- **HeapNumber**: 64-bit double, 힙에 박스됨
+
+```js
+let x = 42;       // Smi
+x = 42.5;         // HeapNumber (deopt)
+x = 2 ** 32;      // HeapNumber
+x |= 0;           // Smi로 강제 (비트 연산은 int32)
+```
+
+핫 루프에서 타입이 바뀌면 TurboFan이 deopt 할 수 있음.
+
+---
+
+## 9. 배열 Element Kinds (V8)
+
+V8은 배열에 6+종류의 내부 표현을 사용, 성능 차이 큼.
+
+```
+PACKED_SMI_ELEMENTS     [1, 2, 3]            — 빠름
+PACKED_DOUBLE_ELEMENTS  [1.5, 2.5]
+PACKED_ELEMENTS         [1, 'a', {}]
+HOLEY_SMI_ELEMENTS      [1, , 3]             — 느림
+HOLEY_DOUBLE_ELEMENTS   [1.5, , 2.5]
+HOLEY_ELEMENTS          [1, , 'a']
+DICTIONARY_ELEMENTS     arr[1e9] = 1         — 매우 느림
+```
+
+한 번 격하되면 **원복 안 됨**.
+
+### 배열 생성 팁
+
+```js
+// 나쁨 — HOLEY
+const arr = new Array(100);
+
+// 좋음 — PACKED
+const arr = Array.from({length: 100}, () => 0);
+```
+
+---
+
+## 10. False Sharing
+
+멀티 코어에서 발생. 여러 코어가 **같은 캐시 라인의 다른 변수** 를 쓰면, 캐시 라인이 계속 코어 간에 이동 → 성능 저하.
+
+```
+Core 0: x++  (캐시 라인 L 로드)
+Core 1: y++  (같은 L에 있음 → L을 가져와야 함)
+... 핑퐁
+```
+
+- 해결: 한 변수가 자체 캐시 라인에 있도록 패딩
+- JS에서는 SharedArrayBuffer 쓸 때 고려 (드물지만 성능 튜닝 시)
+
+---
+
+## 11. 벤치마킹의 함정
+
+### 문제 1 — JIT 워밍업
+
+```js
+console.time('first');
+loop();
+console.timeEnd('first');   // 100ms (Ignition)
+
+console.time('second');
+loop();
+console.timeEnd('second');  // 10ms (TurboFan 최적화 후)
+```
+
+→ 첫 실행은 버리고, 여러 번 반복 평균.
+
+### 문제 2 — Dead Code Elimination
+
+```js
+const start = performance.now();
+for (let i = 0; i < 1e9; i++) { Math.sqrt(i); } // 결과 안 씀
+// TurboFan이 통째로 제거할 수 있음 → 0ms
+```
+
+→ 결과를 sink 변수에 누적.
+
+### 문제 3 — 마이크로 벤치마크 ≠ 실제 성능
+
+- 캐시가 이미 따뜻함 (콜드 상태와 다름)
+- 실제 앱의 메모리 패턴과 달라 결과 왜곡
+- **프로파일링 후 최적화** 가 원칙
+
+---
+
+## 12. 브라우저 성능 최적화 실전
+
+### Long Task 방지
+
+- 50ms 넘는 JS 실행은 INP(상호작용 지연) 나빠짐
+- 쪼개기 (setTimeout, requestIdleCallback, scheduler.yield())
+
+### 리플로우 배치
+
+(2-5장 복습)
+
+- 읽기/쓰기 분리, `requestAnimationFrame` 활용
+
+### Layer Promotion
+
+- `transform`, `opacity` 는 컴포지터 스레드에서 GPU로 처리 → 메인 스레드 부담 ↓
+
+### 렌더링 프로파일링
+
+- Chrome DevTools Performance
+- Frame rate (60fps = 16.67ms/frame)
+
+---
+
+## 13. ⚠️ 자주 하는 오해·실수
+
+| 오해 | 실제 |
+|------|------|
+| 알고리즘 빅오만 중요 | 실제 성능엔 캐시 효율이 상수 배수로 크게 작용 |
+| `for` 가 `forEach` 보다 빠르다 | V8 최적화 이후 차이 거의 없음 — 알고리즘 골격이 더 중요 |
+| 객체 속성 삭제는 공짜 | `delete` 는 hidden class 격하 → 성능·메모리 악영향 |
+| `Map` 보다 객체가 빠름 | 많은 키를 동적으로 넣고 빼면 `Map` 이 안전 |
+| 배열에 `new Array(N)` 이 빠름 | HOLEY 상태로 시작 → `Array.from` 으로 packed 생성 |
+
+---
+
+## 14. 연습 문제
+
+**Q1.** 캐시 미스 1회 비용이 왜 그렇게 큰가?
+
+<details>
+<summary>정답</summary>
+
+DRAM 접근은 **100ns 이상**, CPU 클럭(~0.3ns) 기준 **300사이클 이상 유휴**. 파이프라인도 대부분 멈춘다. L1 히트는 1ns, 차이 100배 이상. 알고리즘의 빅오가 같아도 캐시 효율로 10배 이상 성능 차이가 난다.
+
+</details>
+
+**Q2.** 2D 배열을 행 우선으로 순회하는 것이 열 우선보다 빠른 이유는?
+
+<details>
+<summary>정답</summary>
+
+메모리 레이아웃이 행 단위로 연속되므로, 행 우선 순회는 **캐시 라인 단위로 한 번 로드에 여러 원소** 사용 → 공간 지역성 극대화. 열 우선은 매 접근마다 다른 캐시 라인을 로드 → 히트율 급락.
+
+</details>
+
+**Q3.** V8의 Hidden Class가 깨지는 3가지 패턴은?
+
+<details>
+<summary>정답</summary>
+
+1. 속성 **순서** 가 다르게 생성됨 (`{x,y}` vs `{y,x}`)
+2. 객체 생성 후 **속성 추가/삭제** (특히 `delete`)
+3. 같은 함수에 **다른 shape** 의 객체를 흘려보내 Polymorphic/Megamorphic 유발
+
+해결: 클래스 + 생성자에서 모든 필드를 같은 순서로 초기화.
+
+</details>
+
+**Q4.** Monomorphic/Polymorphic/Megamorphic 중 무엇이 가장 빠른가?
+
+<details>
+<summary>정답</summary>
+
+**Monomorphic**. 한 종류의 hidden class만 흐르면 IC가 속성 오프셋을 단일 엔트리로 캐시 → 직접 메모리 접근. Polymorphic은 2~4개 엔트리 스캔, Megamorphic은 해시 테이블 검색으로 수~수십 배 느려질 수 있다.
+
+</details>
+
+**Q5.** `delete obj.key` 가 왜 성능에 나쁜가?
+
+<details>
+<summary>정답</summary>
+
+객체가 **Dictionary Mode** 로 전환됨. Hidden class 기반의 O(1) 속성 접근을 잃고 해시 맵 스타일 검색이 된다. 한 번 격하되면 쉽게 원복되지 않아 해당 객체와 비슷한 shape의 IC 전체가 megamorphic 화될 수 있다. 대안: 속성을 `undefined` 로 두거나, Map을 쓴다.
+
+</details>
+
+**Q6.** 분기 예측 실패 비용이 JS 성능에도 영향을 주는가?
+
+<details>
+<summary>정답</summary>
+
+**그렇다**. V8이 핫 코드를 네이티브로 JIT 컴파일하면 실제 CPU의 분기 예측기가 작동한다. 데이터 패턴이 랜덤이면 예측 실패로 파이프라인 flush가 빈번. 정렬된 데이터가 처리에 유리한 경우가 있다(고전 "Why is it faster to process a sorted array").
+
+</details>
+
+**Q7.** `new Array(1000)` 과 `Array.from({length: 1000}, () => 0)` 의 차이는?
+
+<details>
+<summary>정답</summary>
+
+- `new Array(1000)`: 길이 1000의 **HOLEY_SMI_ELEMENTS** (빈 슬롯). 이후 읽기/쓰기마다 구멍 체크 비용 발생.
+- `Array.from({length: 1000}, () => 0)`: 모든 슬롯이 초기화된 **PACKED_SMI_ELEMENTS**. 구멍 체크 없음 → 빠름.
+
+핫 루프의 배열은 반드시 PACKED로 시작해야 한다.
+
+</details>
+
+---
+
+## 15. 체크리스트
+
+- [ ] 메모리 계층의 속도/크기 차이를 감각적으로 안다
+- [ ] 시간/공간 지역성을 예로 설명할 수 있다
+- [ ] 캐시 친화적 2D 배열 순회 순서를 안다
+- [ ] V8 Hidden Class와 Inline Cache의 개념을 안다
+- [ ] Monomorphic ↔ Polymorphic ↔ Megamorphic 성능 차이를 안다
+- [ ] 배열 Element Kinds 격하 규칙을 안다
+- [ ] `delete` 와 sparse 인덱싱을 피할 줄 안다
+- [ ] JIT 워밍업을 고려해 벤치마크한다
+- [ ] Long Task와 Layer Promotion으로 렌더링 성능을 다룬다
+
+---
+
+[← 3-3. 메모리 관리](3단계-3-메모리-관리) | [🏠 홈](Home) | [4-1. DB 기초 →](4단계-1-DB-기초와-선택-기준)

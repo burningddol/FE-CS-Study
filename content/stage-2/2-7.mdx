@@ -1,0 +1,448 @@
+
+> **목표**: Cookie, localStorage, sessionStorage, IndexedDB, Cache Storage의 **차이점과 적절한 용도**를 알고, 보안·용량·동기성·생명주기를 기준으로 선택할 수 있어야 한다.
+
+* * *
+
+## 0. 왜 브라우저가 데이터를 저장해야 하나
+
+### 0-1. 웹의 본래 모델: 저장 없음
+
+초기 웹은 단순했다. 서버가 HTML 주면 브라우저가 그리고, 페이지를 떠나면 **아무것도 남지 않았다**. 하지만 실제 앱에는 저장이 필요하다.
+
+*   로그인 상태 유지 (매번 재로그인 싫음)
+*   다크 모드 같은 개인 설정
+*   장바구니 (서버 안 가도 유지)
+*   오프라인에서도 동작하는 PWA
+*   대용량 데이터 캐시 (이미지, API 응답)
+
+용도마다 필요한 **용량, 수명, 보안, 속도**가 달라서 여러 저장소가 탄생했다.
+
+### 0-2. "Origin 단위 격리" — 대원칙
+
+브라우저 저장소는 모두 **Origin** 단위로 격리된다.
+
+> **Origin = scheme(프로토콜) + host(도메인) + port**
+>
+> `https://example.com:443` — 이 세트가 같아야 같은 저장소
+
+`a.com`이 설정한 쿠키를 `b.com`이 읽을 수 없다. `http://a.com`과 `https://a.com`도 서로 다른 Origin이다. 이 격리가 **웹 보안의 바닥**이다 (2-8 챕터의 SOP). 이 기본을 깔고 각 저장소를 본다.
+
+### 0-3. 비교 기준 4가지
+
+어느 저장소를 쓸지 결정할 때 묻는 질문.
+
+1.  **얼마나 저장해야 하나** — 용량 한계
+2.  **언제 사라져야 하나** — 탭 종료 시? 영구? 만료 시각?
+3.  **서버에 자동 전송이 필요한가** — 쿠키만 해당
+4.  **동기인가 비동기인가** — 큰 데이터는 비동기가 필수
+
+이 네 축으로 구분하면 저장소 선택이 명쾌하다.
+
+* * *
+
+## 1. 한눈에 비교
+
+| 저장소 | 용량 | 만료 | 서버 전송 | 동기성 | 용도 |
+|--------|------|------|----------|--------|------|
+| **Cookie** | ~4KB | 설정 가능 | ✅ 매 요청 자동 | 동기 | 세션 ID, 인증 토큰 |
+| **localStorage** | ~5-10MB | 영구 | ❌ | 동기 | 사용자 설정, 테마 |
+| **sessionStorage** | ~5-10MB | 탭 닫으면 삭제 | ❌ | 동기 | 폼 임시 데이터 |
+| **IndexedDB** | 수백 MB ~ GB | 영구 | ❌ | 비동기 | 대용량 구조화 데이터, 오프라인 |
+| **Cache Storage** | 브라우저마다 상이 | 직접 관리 | ❌ | 비동기 | HTTP 응답 캐시 (Service Worker) |
+
+* * *
+
+## 2. Cookie
+
+### 기본
+
+```
+Set-Cookie: sessionId=abc123; Max-Age=3600; Path=/; Secure; HttpOnly; SameSite=Strict
+```
+
+*   서버가 `Set-Cookie` 로 설정, 브라우저가 `Cookie` 헤더로 자동 전송
+*   **도메인·경로 단위**로 범위 지정
+*   클라이언트 JS에서 `document.cookie` 로 접근 가능 (단, `HttpOnly` 이면 불가)
+
+### 주요 속성
+
+| 속성 | 의미 |
+|------|------|
+| `Domain` | 적용 도메인. 생략 시 설정한 도메인만. 명시 시 서브도메인 포함 |
+| `Path` | 적용 경로. `/api` → `/api/*` 만 전송 |
+| `Expires` | 절대 만료 시각 |
+| `Max-Age` | 상대 만료 (초). Expires보다 우선 |
+| `Secure` | HTTPS에서만 전송 |
+| `HttpOnly` | **JS에서 접근 불가** → XSS 방어 |
+| `SameSite` | `Strict` / `Lax` / `None` → CSRF 방어 |
+
+### SameSite
+
+| 값 | 동작 |
+|----|------|
+| `Strict` | 크로스 사이트면 절대 전송 안 함 |
+| `Lax` | 최상위 navigation(GET)에만 전송. 기본값(최신 브라우저) |
+| `None` | 항상 전송. 반드시 `Secure` 동반 |
+
+### ⚠️ 함정
+
+*   **IE/구형 브라우저**는 `SameSite=None` 을 `Strict` 처럼 해석 → 크로스 도메인 인증 깨짐.
+*   `document.cookie = "..."` 는 단일 쿠키만 설정, 전체 덮어쓰기 아님.
+
+### JS 예제
+
+```javascript
+// 설정
+document.cookie = 'theme=dark; path=/; max-age=31536000';
+
+// 읽기 — 모든 쿠키가 세미콜론으로 구분된 문자열
+const cookies = document.cookie.split('; ').reduce((acc, pair) => {
+  const [k, v] = pair.split('=');
+  acc[k] = decodeURIComponent(v);
+  return acc;
+}, {});
+
+// 삭제 — Max-Age=0
+document.cookie = 'theme=; path=/; max-age=0';
+```
+
+* * *
+
+## 3. localStorage
+
+```javascript
+localStorage.setItem('user', JSON.stringify({ id: 1, name: 'Alice' }));
+const user = JSON.parse(localStorage.getItem('user'));
+localStorage.removeItem('user');
+localStorage.clear();
+```
+
+### 특징
+
+*   **동기 API** → 큰 데이터 저장 시 메인 스레드 블록
+*   **문자열만** 저장 (객체는 `JSON.stringify`)
+*   **Origin 단위** (protocol + host + port)
+*   탭 간 공유됨, 만료 없음
+*   `storage` 이벤트로 다른 탭의 변경 감지 가능
+
+### ⚠️ 함정
+
+```javascript
+// 나쁨 — 용량 초과 시 예외로 앱이 죽음
+localStorage.setItem('huge', bigData);
+
+// 좋음 — try/catch로 QuotaExceededError 방어
+try {
+  localStorage.setItem('huge', bigData);
+} catch (e) {
+  if (e.name === 'QuotaExceededError') {
+    // 용량 초과 대응
+  }
+}
+```
+
+*   **민감 정보 저장 금지**: XSS 한 방에 전부 탈취된다.
+*   **용량 초과** 시 `QuotaExceededError` 발생.
+*   **시크릿 모드**에서는 저장 실패하거나 0KB 할당.
+
+### 탭 간 동기화
+
+```javascript
+window.addEventListener('storage', (e) => {
+  if (e.key === 'theme') {
+    applyTheme(e.newValue);
+  }
+});
+```
+
+> 주의: 같은 탭에서 발생한 변경은 **이 이벤트를 트리거하지 않는다**. 다른 탭/창에서만.
+
+* * *
+
+## 4. sessionStorage
+
+*   API는 `localStorage` 와 동일
+*   **탭 단위** 저장 → 탭을 닫으면 삭제
+*   새 탭/창은 **별개의 sessionStorage** 를 가짐 (iframe은 부모와 공유)
+
+### 용도
+
+*   폼 작성 중 새로고침 대비 임시 저장
+*   탭별 상태 (같은 사이트를 여러 탭으로 열고 각각 다른 상태 유지)
+
+```javascript
+// 새로고침 시에만 유지, 탭 닫으면 사라짐
+sessionStorage.setItem('draft', JSON.stringify(formData));
+```
+
+* * *
+
+## 5. IndexedDB
+
+**브라우저 내장 NoSQL DB**. 수백 MB ~ GB급 데이터 저장 가능. 비동기 트랜잭션 기반.
+
+### 구조
+
+```
+Database → Object Store (≒ 테이블) → Record (key-value)
+```
+
+### 기본 사용
+
+```javascript
+const request = indexedDB.open('myDB', 1);
+
+request.onupgradeneeded = (e) => {
+  const db = e.target.result;
+  const store = db.createObjectStore('users', { keyPath: 'id' });
+  store.createIndex('byEmail', 'email', { unique: true });
+};
+
+request.onsuccess = (e) => {
+  const db = e.target.result;
+  const tx = db.transaction('users', 'readwrite');
+  const store = tx.objectStore('users');
+  store.put({ id: 1, name: 'Alice', email: 'a@x.com' });
+  tx.oncomplete = () => db.close();
+};
+```
+
+### ⚠️ 함정
+
+*   Native API가 **콜백 지옥** + Promise 미지원 → 실무에서는 래퍼 사용
+    *   **idb** (Jake Archibald) — Promise 기반 얇은 래퍼
+    *   **Dexie.js** — 선언적 쿼리, 관계
+    *   **localForage** — localStorage와 같은 API, IndexedDB 백엔드
+
+```javascript
+// idb 예제 — 훨씬 깔끔
+import { openDB } from 'idb';
+
+const db = await openDB('myDB', 1, {
+  upgrade(db) { db.createObjectStore('users', { keyPath: 'id' }); }
+});
+await db.put('users', { id: 1, name: 'Alice' });
+const user = await db.get('users', 1);
+```
+
+### 용도
+
+*   PWA 오프라인 데이터
+*   대용량 사용자 생성 콘텐츠 (에디터, 메모 앱)
+*   서버 응답 캐시
+
+* * *
+
+## 6. Cache Storage (Service Worker 전용)
+
+**HTTP 응답(Request/Response 쌍)을 저장**. Service Worker에서 fetch 가로채서 사용.
+
+```javascript
+// sw.js
+self.addEventListener('install', (e) => {
+  e.waitUntil(
+    caches.open('v1').then((cache) =>
+      cache.addAll(['/', '/app.js', '/styles.css'])
+    )
+  );
+});
+
+self.addEventListener('fetch', (e) => {
+  e.respondWith(
+    caches.match(e.request).then((hit) => hit || fetch(e.request))
+  );
+});
+```
+
+### 전략
+
+| 전략 | 설명 | 용도 |
+|------|------|------|
+| Cache First | 캐시 먼저, 없으면 네트워크 | 정적 에셋 |
+| Network First | 네트워크 먼저, 실패 시 캐시 | API 응답 |
+| Stale While Revalidate | 캐시 응답 후 백그라운드 갱신 | 이미지, 폰트 |
+| Cache Only | 캐시만 | 오프라인 페이지 |
+| Network Only | 네트워크만 | POST/PUT |
+
+* * *
+
+## 7. Private State Tokens / Storage Access API (최신)
+
+### Storage Access API
+
+*   Safari ITP, Chrome Third-Party Cookie 제한 이후 필요
+*   iframe이 부모 도메인의 저장소에 접근 요청
+
+```javascript
+// iframe 내부
+if (await document.hasStorageAccess()) {
+  // 이미 권한 있음
+} else {
+  await document.requestStorageAccess(); // 사용자 제스처 필요
+}
+```
+
+### Partitioned Cookies (CHIPS)
+
+```
+Set-Cookie: session=xyz; Secure; Partitioned
+```
+
+*   쿠키가 **상위 사이트별로 분리**됨
+*   광고·임베드 위젯이 크로스 사이트 트래킹 없이 동작하도록
+
+* * *
+
+## 8. 저장소 용량 관리
+
+### 현재 사용량 확인
+
+```javascript
+const estimate = await navigator.storage.estimate();
+console.log(estimate.quota);   // 할당된 총 용량
+console.log(estimate.usage);   // 현재 사용량
+console.log(estimate.usageDetails); // 세부 (indexedDB, caches 등)
+```
+
+### 영구 저장소 요청
+
+*   기본: 브라우저가 용량 부족 시 임의로 삭제 가능(best-effort)
+*   Persistent: 사용자 허락 후 **삭제 안 됨**
+
+```javascript
+if (await navigator.storage.persist()) {
+  console.log('저장소가 영구 보존됩니다');
+}
+```
+
+* * *
+
+## 9. 저장소 선택 플로우차트
+
+```
+저장할 데이터는?
+ ├─ 인증 세션 정보?
+ │    └─ Cookie (HttpOnly, Secure, SameSite)
+ ├─ 작은 사용자 설정 (테마, 언어)?
+ │    └─ localStorage
+ ├─ 탭별 임시 상태?
+ │    └─ sessionStorage
+ ├─ 대용량 구조화 데이터?
+ │    └─ IndexedDB
+ ├─ HTTP 응답 캐시?
+ │    └─ Cache Storage (Service Worker)
+ └─ 민감 정보 (토큰, 카드번호)?
+      └─ HttpOnly Cookie (JS 저장소 절대 금지)
+```
+
+* * *
+
+## 10. 실전 예제 — 테마 저장
+
+```javascript
+// 1. localStorage에서 초기값 복원
+// 2. 변경 시 즉시 저장
+// 3. 다른 탭과 동기화
+
+import { useState, useEffect } from 'react';
+
+type Theme = 'light' | 'dark';
+
+function useTheme(): [Theme, (t: Theme) => void] {
+  const [theme, setTheme] = useState<Theme>(() => {
+    try {
+      return (localStorage.getItem('theme') as Theme) ?? 'light';
+    } catch {
+      return 'light';
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('theme', theme);
+    } catch {
+      // 시크릿 모드 등
+    }
+  }, [theme]);
+
+  useEffect(() => {
+    const handler = (e: StorageEvent) => {
+      if (e.key === 'theme' && e.newValue) {
+        setTheme(e.newValue as Theme);
+      }
+    };
+    window.addEventListener('storage', handler);
+    return () => window.removeEventListener('storage', handler);
+  }, []);
+
+  return [theme, setTheme];
+}
+```
+
+* * *
+
+## 11. ⚠️ 자주 하는 실수
+
+| 실수 | 결과 | 대응 |
+|------|------|------|
+| JWT를 localStorage에 저장 | XSS 한 번에 탈취 | HttpOnly 쿠키 사용 |
+| 쿠키에 대용량 저장 | 모든 요청에 실려 감, 4KB 초과 시 거절 | 대용량은 IndexedDB |
+| localStorage에 민감 정보 | 탭 컨텍스트 내 모든 스크립트 접근 가능 | 절대 금지 |
+| sessionStorage를 SSR로 읽기 | 서버에 없음 → 에러 | typeof window 체크 |
+| IndexedDB 트랜잭션을 await 체인에서 중단 | 트랜잭션 자동 커밋 → 쓰기 유실 | 트랜잭션 내 await는 최소화 |
+
+* * *
+
+## 12. 연습 문제
+
+**Q1.** JWT 액세스 토큰을 저장할 곳으로 가장 안전한 곳은?
+
+> **HttpOnly + Secure + SameSite=Strict/Lax 쿠키**. JS에서 접근 불가 → XSS 발생해도 탈취 불가. 2-4장 인증 참조.
+
+**Q2.** `localStorage` 와 `sessionStorage` 의 동작 차이 3가지는?
+
+> 1.  **수명**: local은 영구, session은 탭 닫으면 사라짐
+> 2.  **탭 공유**: local은 같은 Origin의 모든 탭 공유, session은 탭 단위
+> 3.  **storage 이벤트**: local만 다른 탭으로 변경 이벤트 전파
+
+**Q3.** 쿠키의 `SameSite=Lax` 가 CSRF를 부분적으로 막는 원리는?
+
+> 크로스 사이트 요청(다른 사이트의 `<form method=POST>` 등)에 쿠키를 **첨부하지 않음**. 단, 최상위 navigation의 GET은 허용. 그래서 상태 변경은 POST/PUT/DELETE로 해야 한다는 REST 관례와 맞물려 효과적.
+
+**Q4.** IndexedDB와 localStorage 중 어느 쪽을 언제 써야 하는가?
+
+> *   **localStorage**: 수 KB 수준의 단순 key-value (테마, 마지막 방문 URL 등), 동기 접근이 편한 상황.
+> *   **IndexedDB**: 대용량(수 MB+), 구조화 데이터, 인덱스 쿼리 필요, 비동기로 메인 스레드 보호.
+>
+> 동기 API가 메인 스레드를 블록하므로 데이터 양이 조금만 늘어도 IndexedDB로 옮기는 게 안전.
+
+**Q5.** Service Worker의 Cache Storage는 언제 유용한가?
+
+> *   PWA 오프라인 지원 — 네트워크 없어도 앱 셸 로드
+> *   느린 네트워크에서도 즉시 응답 (Cache First)
+> *   3rd party CDN 장애 시 fallback
+> *   정적 에셋의 네트워크 왕복 제거
+
+**Q6.** `document.cookie = 'a=1'` 을 두 번 호출하면 기존 쿠키가 지워지는가?
+
+> **아니다**. `document.cookie` 는 set 시 단일 쿠키만 추가/덮어쓰고, 다른 쿠키에는 영향 없다. 읽을 때만 모든 쿠키를 세미콜론으로 이어 붙인 문자열을 반환한다.
+
+**Q7.** IndexedDB 트랜잭션 안에서 `await fetch(...)` 를 해도 되는가?
+
+> **하지 말아야 한다**. 트랜잭션은 이벤트 루프가 해당 트랜잭션 관련 콜백 없이 한 턴을 돌면 자동 커밋된다. `await fetch` 로 기다리는 동안 트랜잭션이 닫혀 이후 쓰기 작업이 `TransactionInactiveError` 로 실패한다. 필요한 데이터는 트랜잭션 시작 전에 fetch해 둔다.
+
+* * *
+
+## 13. 체크리스트
+
+*    5가지 저장소의 용량·만료·동기성을 구분할 수 있다
+*    쿠키의 `HttpOnly`, `Secure`, `SameSite` 를 설명할 수 있다
+*    localStorage에 JWT를 저장하면 안 되는 이유를 안다
+*    sessionStorage가 탭 단위임을 안다
+*    IndexedDB는 비동기 트랜잭션 기반임을 안다
+*    Service Worker의 Cache Storage가 PWA 오프라인의 핵심임을 안다
+*    `navigator.storage.estimate()` 로 용량을 확인할 수 있다
+
+* * *
+
+[← 2-6. 이벤트 루프](2%EB%8B%A8%EA%B3%84-6-%EC%9D%B4%EB%B2%A4%ED%8A%B8-%EB%A3%A8%ED%94%84) | [2-8. 웹 보안 →](2%EB%8B%A8%EA%B3%84-8-%EC%9B%B9-%EB%B3%B4%EC%95%88)

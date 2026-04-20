@@ -1,0 +1,651 @@
+
+> **학습 목표**
+> - SOLID 5원칙을 FE 코드 예시로 설명할 수 있어야 한다
+> - DRY·KISS·YAGNI를 **실무에서 언제 적용하고 언제 피할지** 판단할 수 있어야 한다
+> - 상속보다 합성(Composition over Inheritance)이 왜 선호되는지 이해한다
+> - "원칙 이름으로" 리뷰 코멘트를 쓸 수 있는 수준을 목표로 한다
+
+* * *
+
+## 0. 원칙과 패턴, 뭐가 다른가 — 초심자용
+
+### 0-1. 패턴 vs 원칙
+
+| | 패턴 (6-1) | 원칙 (6-2) |
+|---|---|---|
+| 한 줄 | "이런 문제엔 이런 구조" | "이런 기준으로 판단" |
+| 예시 | Observer, Strategy | SRP, DRY, KISS |
+| 성격 | 구체적 **해결책** | 추상적 **판단 기준** |
+| 상황 | "비슷한 구조가 반복된다" | "이 코드 맞나?" 의문이 들 때 |
+
+**패턴이 요리 레시피라면, 원칙은 "신선한 재료 쓰기", "짜게 먹지 않기" 같은 지침.**
+
+### 0-2. 왜 "원칙"이 필요한가
+
+코드는 **한 번 쓰이고 수십 번 읽힌다.** 6개월 뒤 내가 쓴 코드를 내가 못 알아보면 최악이다. 원칙들은 "미래의 나, 또는 팀원이 이 코드를 **이해하고 수정할 수 있게**" 만들기 위한 지침.
+
+### 0-3. 이 장의 원칙들 미리
+
+| 원칙 | 한 줄 |
+|---|---|
+| **SRP** (Single Responsibility) | 한 모듈은 한 가지 이유로만 변해야 함 |
+| **OCP** (Open/Closed) | 확장에는 열려 있고, 수정에는 닫혀 있어야 함 |
+| **LSP** (Liskov Substitution) | 자식은 부모 자리에 넣어도 동작해야 함 |
+| **ISP** (Interface Segregation) | 안 쓰는 메서드에 의존하게 하지 마라 |
+| **DIP** (Dependency Inversion) | 구체가 아닌 추상에 의존하라 |
+| **DRY** | Don't Repeat Yourself — 같은 로직 두 번 쓰지 마라 |
+| **KISS** | Keep It Simple, Stupid — 단순하게 |
+| **YAGNI** | You Aren't Gonna Need It — 미리 만들지 마라 |
+| **Composition > Inheritance** | 상속보다 합성 |
+
+### 0-4. 초보자가 가장 많이 하는 실수
+
+원칙을 배우면 **"모든 곳에 기계적으로 적용"** 하게 된다. 결과:
+
+- DRY 과적용 → 억지로 공통 함수 뽑아서 **결합도 폭발**
+- SRP 과적용 → 컴포넌트 30개로 쪼개서 **읽기 어려움**
+- YAGNI 무시 → "나중에 쓸지도 몰라" 로 **죽은 코드 양산**
+
+**원칙끼리 서로 충돌한다.** 예: DRY 와 KISS — 중복 제거하려다 코드가 복잡해짐. 이럴 땐 어떻게 해야 할까? → 이 장의 진짜 주제.
+
+### 0-5. 원칙은 "판단 기준"이지 "규칙"이 아니다
+
+"이 코드는 SRP를 따르는가?"는 이분법이 아니다. "**어느 정도** SRP인가?" 를 판단하고, 트레이드오프를 의식하며 결정하는 것. **룰북이 아니라 도구상자**로 쓰는 게 맞다.
+
+### 0-6. 이 장을 읽은 뒤 할 수 있는 것
+
+- 코드 리뷰에서 "이건 SRP 위반이에요" 같은 **구체적 언어**로 피드백
+- 본인 코드 리팩토링 시 "왜 이 구조로 쪼개야 하는지" **근거** 있는 설명
+- "이 추상화 필요한가?" **멈춰서 판단**할 수 있음 (YAGNI)
+- 상속 폭탄 대신 **합성**을 우선 고려
+
+---
+
+## 1. 원칙이 필요한 이유
+
+> **코드는 한 번 쓰이고 수십 번 읽힌다.** 읽는 사람이 예측·수정할 수 있는 코드가 좋은 코드다.
+
+설계 원칙은 **"왜 이렇게 쪼개는가?"에 대한 검증된 답**이다. 패턴이 해결책이라면 원칙은 **판단 기준**이다.
+
+---
+
+## 2. SOLID
+
+Robert C. Martin이 정리한 객체지향 5원칙. **언어 중립**이라 JS/TS에도 그대로 적용된다.
+
+### 2-1. S — Single Responsibility Principle (단일 책임 원칙)
+
+> **한 모듈/함수는 변경되어야 할 단 하나의 이유만 가진다.**
+
+"하나의 일만 한다"가 아니라 **하나의 액터(stakeholder)를 위해 존재한다**로 이해하는 게 정확하다.
+
+#### 나쁜 예
+
+```jsx
+function UserCard({ userId }) {
+  const [user, setUser] = useState(null);
+  useEffect(() => {
+    fetch(`/api/users/${userId}`)
+      .then(r => r.json())
+      .then(setUser);
+  }, [userId]);
+
+  const formattedJoinDate = new Date(user?.createdAt).toLocaleDateString('ko-KR');
+  const isPremium = user?.subscription === 'premium' && user?.active;
+
+  return (
+    <div>
+      <img src={user?.avatar} />
+      <h2>{user?.name}</h2>
+      <p>가입일: {formattedJoinDate}</p>
+      {isPremium && <Badge />}
+    </div>
+  );
+}
+```
+
+**책임이 섞인 지점**:
+- 데이터 fetch
+- 포맷팅 로직
+- 비즈니스 규칙 판단 (`isPremium`)
+- UI 렌더
+
+#### 좋은 예
+
+```jsx
+// 1. 데이터 fetch
+function useUser(userId) {
+  return useQuery(['user', userId], () => api.getUser(userId));
+}
+
+// 2. 비즈니스 규칙
+function isPremiumUser(user) {
+  return user.subscription === 'premium' && user.active;
+}
+
+// 3. 포맷팅
+function formatKoreanDate(date) {
+  return new Date(date).toLocaleDateString('ko-KR');
+}
+
+// 4. UI
+function UserCard({ userId }) {
+  const { data: user } = useUser(userId);
+  if (!user) return <Skeleton />;
+
+  return (
+    <div>
+      <img src={user.avatar} />
+      <h2>{user.name}</h2>
+      <p>가입일: {formatKoreanDate(user.createdAt)}</p>
+      {isPremiumUser(user) && <Badge />}
+    </div>
+  );
+}
+```
+
+각 단위는 **다른 이유로 변경**된다. API 스펙 변경 → fetch만 수정, UI 변경 → 컴포넌트만 수정.
+
+⚠️ **SRP 오해**: "함수를 무조건 짧게"가 아니다. 10줄짜리 함수가 하나의 책임을 잘 수행한다면 그대로 둔다.
+
+### 2-2. O — Open-Closed Principle (개방-폐쇄 원칙)
+
+> **확장에는 열려 있고, 변경에는 닫혀 있어야 한다.**
+
+기존 코드를 **수정하지 않고** 새 동작을 **추가**할 수 있어야 한다.
+
+#### 나쁜 예 (새 수단 추가 시 기존 함수 수정)
+
+```js
+function calculateShippingCost(order, method) {
+  if (method === 'standard') return order.weight * 1000;
+  if (method === 'express') return order.weight * 2000;
+  if (method === 'overnight') return order.weight * 5000; // 새로 추가
+  throw new Error('unknown');
+}
+```
+
+#### 좋은 예 (Strategy)
+
+```js
+const shippingStrategies = {
+  standard: (o) => o.weight * 1000,
+  express: (o) => o.weight * 2000,
+  overnight: (o) => o.weight * 5000,
+};
+
+function calculateShippingCost(order, method) {
+  const strategy = shippingStrategies[method];
+  if (!strategy) throw new Error(`unknown: ${method}`);
+  return strategy(order);
+}
+
+// 새 수단: shippingStrategies.drone = (o) => o.weight * 10000;
+```
+
+**현실 타협**: 완벽한 OCP는 어렵고, **자주 변하는 축**을 식별해 그 축만 열어두는 게 실무 접근이다.
+
+### 2-3. L — Liskov Substitution Principle (리스코프 치환 원칙)
+
+> **자식 타입은 부모 타입이 쓰이는 모든 자리에서 오동작 없이 대체 가능해야 한다.**
+
+자식이 부모의 **기대 계약(contract)을 깨면 LSP 위반**.
+
+#### 고전 예: 정사각형 vs 직사각형
+
+```ts
+class Rectangle {
+  constructor(public width: number, public height: number) {}
+  setWidth(w: number) { this.width = w; }
+  setHeight(h: number) { this.height = h; }
+  area() { return this.width * this.height; }
+}
+
+class Square extends Rectangle {
+  setWidth(w: number) { this.width = this.height = w; } // 약속 깨짐
+  setHeight(h: number) { this.width = this.height = h; }
+}
+
+function test(rect: Rectangle) {
+  rect.setWidth(5);
+  rect.setHeight(4);
+  console.assert(rect.area() === 20); // Square 넣으면 16 → 실패
+}
+```
+
+Rectangle을 받는 함수가 Square로 대체되면 **불변식이 깨진다** → LSP 위반.
+
+#### FE 실전
+
+```ts
+interface Dialog {
+  open(): void;
+  close(): void;
+}
+
+class ModalDialog implements Dialog { /* ... */ }
+
+class ConfirmDialog extends ModalDialog {
+  open() {
+    if (!confirm('정말?')) return; // 부모 계약을 깬다 (open이 항상 여는 게 아님)
+    super.open();
+  }
+}
+```
+
+ConfirmDialog를 Dialog로 쓰는 코드가 망가진다. 차라리 **별개 타입**으로 분리해야 한다.
+
+### 2-4. I — Interface Segregation Principle (인터페이스 분리 원칙)
+
+> **클라이언트가 사용하지 않는 메서드에 의존하게 만들지 말라.**
+
+**큰 인터페이스 하나 < 여러 작은 인터페이스**.
+
+#### 나쁜 예
+
+```ts
+interface UserActions {
+  fetchProfile(): Promise<User>;
+  updateProfile(data): Promise<User>;
+  deleteAccount(): Promise<void>;
+  exportData(): Promise<Blob>;
+  setupTwoFactor(): Promise<void>;
+  // ... 50개
+}
+
+function ProfilePage({ actions }: { actions: UserActions }) {
+  // 실제로는 fetchProfile만 씀
+}
+```
+
+ProfilePage 테스트 시 **쓰지 않는 49개 메서드의 mock**이 필요해진다.
+
+#### 좋은 예
+
+```ts
+interface ProfileReader { fetchProfile(): Promise<User>; }
+interface ProfileWriter { updateProfile(data): Promise<User>; }
+interface AccountDeleter { deleteAccount(): Promise<void>; }
+
+function ProfilePage({ actions }: { actions: ProfileReader }) {
+  // fetchProfile만 필요 → 테스트 mock 1개
+}
+```
+
+**100개 prop 받는 거대 컴포넌트**도 ISP 위반이다. 쪼개라.
+
+### 2-5. D — Dependency Inversion Principle (의존성 역전 원칙)
+
+> **상위 모듈은 하위 모듈에 의존하지 않는다. 둘 다 추상에 의존한다.**
+
+구체(concrete)가 아니라 **추상(interface / 훅 / 함수 시그니처)**에 의존.
+
+#### 나쁜 예
+
+```jsx
+import { firebaseAuth } from '@/lib/firebase';
+
+function LoginForm() {
+  const handleSubmit = async (email, password) => {
+    await firebaseAuth.signInWithEmailAndPassword(email, password);
+  };
+  // ...
+}
+```
+
+Firebase를 Auth0로 바꾸려면 **컴포넌트를 수정**해야 한다. 테스트도 Firebase mock 필요.
+
+#### 좋은 예
+
+```jsx
+// 추상 (인터페이스)
+interface AuthService {
+  login(email: string, password: string): Promise<User>;
+}
+
+// 훅으로 주입
+function LoginForm() {
+  const auth = useAuth(); // AuthService 구현체를 Context로 주입
+  const handleSubmit = (email, password) => auth.login(email, password);
+  // ...
+}
+
+// 앱 루트에서 구현 결정
+<AuthProvider service={firebaseAuthService}>
+  <App />
+</AuthProvider>
+
+// 테스트에서
+<AuthProvider service={mockAuthService}>
+  <LoginForm />
+</AuthProvider>
+```
+
+⚠️ **FE의 현실적 DIP**: 컴포넌트가 fetch를 직접 부르는 대신 **커스텀 훅 / TanStack Query** 경계를 두는 것만으로도 충분히 DIP 효과를 얻는다.
+
+---
+
+## 3. DRY (Don't Repeat Yourself)
+
+> **같은 지식(knowledge)은 단 한 곳에 표현되어야 한다.**
+
+### 3-1. 오해 — 코드 모양의 중복 ≠ DRY
+
+3개 파일에 `if (user.role === 'admin') { ... }`가 반복되면:
+- 그들이 **같은 이유로 함께 변한다면 DRY 위반** → 추출
+- **우연히 코드가 비슷하게 생겼을 뿐 다른 이유로 변한다면 손대지 말 것**
+
+Sandi Metz: **"Duplication is far cheaper than the wrong abstraction."**
+
+### 3-2. 잘못된 추출의 위험
+
+성급히 공통 함수로 뽑으면 **요구사항이 갈라질 때** 추출한 함수에 `if` 분기가 계속 쌓이다가 결국 원래 분리된 것만 못하게 된다.
+
+```js
+// 처음엔 깔끔
+function formatName(user) {
+  return `${user.firstName} ${user.lastName}`;
+}
+
+// 6개월 후...
+function formatName(user, { locale = 'en', withTitle, abbreviated, honorific }) {
+  if (locale === 'ko') { /* ... */ }
+  if (locale === 'ja') { /* ... */ }
+  if (withTitle) { /* ... */ }
+  // 20줄 if 체인
+}
+```
+
+### 3-3. DRY 실무 가이드
+
+- **같은 비즈니스 규칙**(예: 퍼센트 계산 공식)은 반드시 한 곳에.
+- **타입 정의**는 한 곳에 두고 import.
+- **UI 표현**은 섣불리 공통화하지 말 것 — 디자인은 자주 갈라진다.
+- **3회 반복**될 때 추출을 고려, 즉시 추출은 지양(Rule of Three).
+
+---
+
+## 4. KISS (Keep It Simple, Stupid)
+
+> **단순한 코드가 최고다. "똑똑한" 코드는 나중에 자신도 못 읽는다.**
+
+### 4-1. 예시
+
+```js
+// ❌ 재귀 + 비트 연산 + 삼항 중첩 — "똑똑해 보이는" 회문 체크
+const isPal = (s) => s.length < 2 ? true : s[0] === s.at(-1) && isPal(s.slice(1, -1));
+
+// ✅ 의도가 명확
+function isPalindrome(s) {
+  let i = 0, j = s.length - 1;
+  while (i < j) {
+    if (s[i] !== s[j]) return false;
+    i++; j--;
+  }
+  return true;
+}
+```
+
+### 4-2. KISS 적용 포인트
+
+- **조건문 단순화**: `if (!!flag === true)` → `if (flag)`
+- **불필요한 추상화 금지**: 사용처 1곳인데 인터페이스부터 만들지 않는다
+- **가독성 우선**: 한 줄 줄이려고 삼항 중첩·`&&` 체인을 쓰지 않는다
+
+---
+
+## 5. YAGNI (You Aren't Gonna Need It)
+
+> **지금 필요하지 않은 기능은 지금 만들지 말라.**
+
+### 5-1. 실무에서 자주 보이는 위반
+
+- "나중에 여러 테마 지원할 수도 있으니까" → ThemeProvider + 10개 색상 토큰 + 스트래티지 패턴을 선제 도입
+- "다른 언어 지원할 수도 있으니까" → 단일 언어 앱에 i18n 라이브러리 통째로 도입
+- "다른 DB로 바꿀 수도 있으니까" → 모든 쿼리를 Repository 인터페이스 뒤에 숨김
+
+**비용**:
+- 지금 없는 요구사항을 상상으로 설계 → 실제 필요해졌을 때 **맞지 않을 확률 높음**
+- 팀이 익혀야 할 추상 계층이 늘어남
+- 테스트할 것이 늘어남
+
+### 5-2. YAGNI가 허락하지 않는 것
+
+- **변경 어려운 근본 결정**(DB 선택, 인증 방식)은 YAGNI 예외. 잘못되면 재작업 비용이 크다.
+- **보안, 성능, 접근성**은 "나중에" 못 붙이는 경우가 많다.
+
+---
+
+## 6. Composition over Inheritance
+
+> **상속보다 합성을 우선하라.**
+
+### 6-1. 상속의 함정
+
+```ts
+class Bird { fly() { /* ... */ } }
+class Penguin extends Bird { /* 펭귄은 날지 못하는데? */ }
+```
+
+상속은 **"is-a"** 관계를 강제한다. 타입 계층이 깊어지면 LSP 위반·계약 오염·다이아몬드 문제가 생긴다.
+
+### 6-2. 합성 접근
+
+```ts
+interface CanFly { fly(): void; }
+interface CanSwim { swim(): void; }
+
+class Bird implements CanFly {
+  fly() { /* ... */ }
+}
+
+class Penguin implements CanSwim {
+  swim() { /* ... */ }
+}
+
+class Duck implements CanFly, CanSwim {
+  fly() { /* ... */ }
+  swim() { /* ... */ }
+}
+```
+
+**"has-a / can-do"** 관점으로 능력을 조합. JS는 믹스인/합성 함수로도 구현 가능.
+
+### 6-3. React에서
+
+- **HOC 상속 X → Hook 합성 O**
+- **거대 컴포넌트 상속 X → 작은 컴포넌트 조합 O**
+
+```jsx
+// ❌ 상속적 접근 (사실 React는 기본적으로 안 됨)
+class FancyButton extends PrimaryButton { /* ... */ }
+
+// ✅ 합성
+<Button variant="primary">
+  <Icon />
+  <span>저장</span>
+</Button>
+```
+
+### 6-4. 실무 휴리스틱
+
+- **공유할 게 "동작"이면 훅/유틸 함수 합성**
+- **공유할 게 "UI 구조"면 컴포넌트 합성**(children, slot)
+- 상속은 **정말 is-a 관계이고, 부모 계약을 온전히 만족**할 때만
+
+---
+
+## 7. 원칙들 사이의 긴장
+
+원칙은 **서로 충돌**할 수 있다. 경험 있는 개발자는 **언제 어느 원칙을 이길지** 안다.
+
+| 상황 | 선택 |
+|------|------|
+| 두 코드가 비슷해 보이지만 다른 이유로 변함 | **KISS > DRY** (추출 금지) |
+| 1회성 스크립트 | **KISS > SRP** (3파일 쪼갤 필요 없음) |
+| 핵심 도메인 로직 | **SRP / DIP 우선** |
+| 프로토타입 초기 | **YAGNI 우선**, 구조는 나중에 |
+| 보안/결제/의료 | **원칙 우선** (버그 비용이 큼) |
+
+---
+
+## 8. 원칙 이름으로 리뷰하기
+
+좋은 리뷰 코멘트 예시:
+
+- > "이 컴포넌트가 fetch·포맷·렌더를 다 하네요. **SRP 관점에서** 훅과 UI로 쪼개면 어떨까요?"
+- > "새 결제 수단 추가할 때마다 이 함수를 고쳐야 하는 구조네요. **OCP가 깨지는 부분**이라 Strategy로 빼보죠."
+- > "이 `any`는 **DIP 관점**에서 인터페이스가 없어서 나온 증상 같아요. AuthService 인터페이스로 정의하죠."
+- > "이 헬퍼는 지금 한 곳에서만 써요. **YAGNI** 적용해서 인라인으로 두는 게 좋겠습니다."
+
+---
+
+## 9. 실무 체크리스트
+
+- [ ] 한 함수/컴포넌트가 **변경되는 이유 1개**인가 (SRP)
+- [ ] 분기 추가 시 기존 함수를 고쳐야 하는가 (OCP 위반 신호)
+- [ ] 자식 타입이 부모 자리에서 문제없이 동작하는가 (LSP)
+- [ ] 의존하는 인터페이스가 실제 쓰는 메서드만 포함하는가 (ISP)
+- [ ] 구체 라이브러리가 아니라 추상(훅·Context)에 의존하는가 (DIP)
+- [ ] 반복이 **지식 중복**인가 **우연한 유사**인가 (DRY)
+- [ ] 지금 필요하지 않은 확장점을 추가하고 있지 않은가 (YAGNI)
+- [ ] 상속 트리 대신 합성으로 같은 목적을 달성할 수 있는가
+
+---
+
+## 10. 연습 문제
+
+**Q1.** SRP를 위반한 컴포넌트의 구체적 예를 하나 들고, 어떻게 쪼갤지 설명하라.
+
+<details>
+<summary>정답</summary>
+
+예: `<OrderForm>`이 다음을 모두 한다 — 폼 state, 입력 검증, 세금 계산, 결제 API 호출, 주문 내역 이메일 발송 트리거, 성공/실패 UI.
+
+쪼개기:
+- **데이터/상태**: `useOrderForm()` (입력 + 검증)
+- **비즈니스 로직**: `calculateTax(order)`, `submitOrder(order)` (순수 함수 또는 서비스)
+- **부수 효과**: React Query mutation으로 API 호출 일원화, onSuccess에서 notify
+- **UI**: `<OrderForm>` — 위 훅/서비스를 조립해 렌더만
+
+이후 "세율이 바뀌었다" → `calculateTax`만, "디자인 변경" → UI만, "API 변경" → mutation만 수정.
+
+</details>
+
+**Q2.** OCP와 Strategy 패턴이 어떤 관계인지 설명하라.
+
+<details>
+<summary>정답</summary>
+
+OCP는 "확장에 열려 있고 변경에 닫혀 있어야 한다"는 **원칙**이고, Strategy는 이 원칙을 실현하는 **구체 패턴**이다. Strategy로 알고리즘을 교체 가능한 단위로 캡슐화해 두면, 새 알고리즘을 추가할 때 **기존 호출자 코드를 수정하지 않고** 새 strategy를 등록만 하면 된다. OCP의 요구(변경 닫힘·확장 열림)를 만족시키는 가장 흔한 수단이다.
+
+</details>
+
+**Q3.** LSP를 위반하는 클래스 계층을 FE 실무 예로 들고, 어떻게 수정하면 되는지 제시하라.
+
+<details>
+<summary>정답</summary>
+
+예: `BaseButton`의 `click()`이 "버튼을 활성화한 뒤 onClick을 호출한다"는 계약인데, `ConfirmButton extends BaseButton`의 `click()`이 **사용자 확인을 받고 취소하면 onClick을 호출하지 않는다**. BaseButton을 기대하는 코드(예: 키보드 접근성 테스트)가 깨진다.
+
+수정:
+- `BaseButton`을 상속하지 않고 **감싸는 컴포넌트**로 만든다. `<ConfirmButton>`은 내부에서 `<Button>`을 사용하되 **자체 onClick**을 가진다.
+- 또는 인터페이스를 분리: `Clickable`(반드시 onClick 발동)과 `Interactive`(조건부 동작)로 구분.
+
+</details>
+
+**Q4.** DRY 원칙을 잘못 적용한 예를 들고, 왜 그것이 문제인지 설명하라.
+
+<details>
+<summary>정답</summary>
+
+예: `AdminUserCard`와 `PublicUserCard`가 80% 비슷해 보여 `UserCard` 컴포넌트 하나로 통합하고 `variant="admin" | "public"` prop을 받는 구조.
+
+문제: 두 카드가 **다른 이유로 변한다**. Admin은 관리 기능·내부 ID 노출·감사 로그 링크가 늘어나고, Public은 SEO 태그·공유 버튼·비공개 정보 마스킹이 늘어난다. 시간이 지나면 `variant === 'admin'` 분기가 수십 개 쌓여 컴포넌트가 괴물이 된다.
+
+해결: **애초에 분리 유지**. 공통으로 빼도 되는 건 `<Avatar>`, `<UserName>` 같은 저수준 부품뿐. 지식이 같은 것만 공유한다.
+
+</details>
+
+**Q5.** 다음 코드는 어떤 원칙을 위반하는가? 개선안을 제시하라.
+```jsx
+import { stripe } from '@/lib/stripe';
+function CheckoutButton({ amount }) {
+  const handleClick = async () => {
+    const res = await stripe.charge({ amount });
+    alert(res.success ? '결제 완료' : '실패');
+  };
+  return <button onClick={handleClick}>결제</button>;
+}
+```
+
+<details>
+<summary>정답</summary>
+
+**DIP 위반** — 컴포넌트가 구체 라이브러리(Stripe)에 직접 의존한다. 결제사를 바꾸려면 컴포넌트 수정이 필요하고, 테스트 시 Stripe mock을 세팅해야 한다. 추가로 **SRP 위반**(UI + 결제 호출 + 사용자 알림)과 **`alert` UX 문제**도 있다.
+
+개선:
+```jsx
+// 1. 추상 인터페이스
+interface PaymentGateway { charge(input): Promise<Result>; }
+
+// 2. Hook으로 주입
+function CheckoutButton({ amount }) {
+  const mutation = useChargePayment();
+  const handleClick = () => mutation.mutate({ amount });
+  return (
+    <button onClick={handleClick} disabled={mutation.isPending}>
+      {mutation.isPending ? '결제 중...' : '결제'}
+    </button>
+  );
+}
+
+// 3. mutation 내부에서 PaymentGateway 사용 (Context 주입)
+```
+테스트는 `PaymentGateway` mock만 주입하면 되고, 결제사 교체 시 컴포넌트는 그대로.
+
+</details>
+
+**Q6.** YAGNI를 예외적으로 적용하면 안 되는 경우 2가지를 들어라.
+
+<details>
+<summary>정답</summary>
+
+1. **인증·인가·보안 관련 결정**: 출시 후 붙이기가 매우 어렵다. 권한 모델, 감사 로그, 토큰 갱신 같은 건 초기에 설계돼야 전체 API·DB 스키마·UI에 안전하게 침투한다.
+2. **DB 스키마·마이그레이션**: 데이터가 쌓인 뒤에 구조를 바꾸면 마이그레이션·다운타임·데이터 손실 위험이 크다. 성능 인덱스, 소프트 삭제 플래그, 감사용 `created_at/updated_at`은 초기부터 넣는 게 일반적이다.
+
+추가로 **접근성(a11y)**, **국제화 경계**도 뒤늦게 붙이면 전면 리팩토링이 된다.
+
+</details>
+
+**Q7.** "Composition over Inheritance"를 React 컴포넌트 재사용 맥락에서 구체적으로 설명하라.
+
+<details>
+<summary>정답</summary>
+
+React에서는 "같은 UI를 공유하는 두 컴포넌트"가 있으면 **상속**(클래스 extends)이 아니라 **합성**으로 해결한다.
+
+- **Children 합성**: `<Card><Header/><Body/></Card>` — Card가 외곽/스타일/라운드 코너를 책임지고, 속 내용은 자식이 결정.
+- **Compound 컴포넌트**: `<Tabs><Tabs.List><Tabs.Tab/></Tabs.List><Tabs.Panel/></Tabs>` — Context로 상태 공유, 부모/자식 역할 분리.
+- **Render Props / Slot**: `<Tooltip content={renderCustomContent}>` — 동작은 공통, 렌더는 위임.
+- **Hook 합성**: `useAuth`, `useForm`, `useKeyboard`를 **한 컴포넌트에서 조합**해 능력 조립.
+
+이러한 방식이 상속보다 좋은 이유: **동작·UI가 독립적으로 조합** 가능, **타입 계약이 얕고 명확**, **테스트가 단위별로 쉬움**, 불필요한 부모 계약 상속이 없다.
+
+</details>
+
+---
+
+## 11. 정리
+
+- **SOLID**는 변화에 강한 구조를 위한 5가지 기준이다 — 책임/확장/치환/분리/역전.
+- **DRY**는 **지식 중복**을 피하는 원칙이지, 코드 모양 중복을 무조건 없애라는 말이 아니다.
+- **KISS**는 "똑똑한" 코드보다 **읽히는** 코드가 낫다는 원칙이다.
+- **YAGNI**는 상상 요구사항에 대한 선제적 설계를 경계한다. 보안·DB는 예외.
+- **Composition over Inheritance**는 React·JS 생태계의 기본기다.
+- 원칙은 **서로 충돌**할 수 있다. 상황에 맞게 어느 것을 이길지 판단하는 게 경험이다.
+- 패턴 이름과 **원칙 이름을 함께** 쓸 수 있으면 리뷰·설계 토론의 언어가 공유된다.
+
+---
+
+[← 6-1. 디자인 패턴](6단계-1-디자인-패턴) | [6-3. 아키텍처 패턴 →](6단계-3-아키텍처-패턴)

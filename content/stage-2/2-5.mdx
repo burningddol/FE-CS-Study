@@ -1,0 +1,446 @@
+
+> **★ 면접 최빈출**. Critical Rendering Path 6단계를 **순서대로** 말할 수 있어야 한다. Reflow/Repaint/Composite 구분은 기본기.
+
+* * *
+
+## 0. 브라우저는 어떻게 HTML을 화면으로 바꾸는가
+
+### 0-1. HTML은 그냥 텍스트다
+
+우리가 쓴 HTML은 **단순 텍스트 파일**이다. 브라우저는 이 텍스트를 받아 픽셀을 그리는 **거대한 변환기** 역할을 한다.
+
+```
+<html><body><h1>안녕</h1></body></html>   ← 그냥 텍스트
+                 ↓
+       [브라우저의 렌더링 엔진]
+                 ↓
+       화면에 실제로 그려진 "안녕"
+```
+
+이 변환이 어떤 단계로 일어나는지가 이 챕터의 핵심이다.
+
+### 0-2. 브라우저의 주요 엔진
+
+브라우저 안에는 크게 두 엔진이 있다.
+
+- **렌더링 엔진**: HTML/CSS를 해석해 화면에 그림
+  - Chrome/Edge → **Blink**
+  - Safari → **WebKit**
+  - Firefox → **Gecko**
+- **JS 엔진**: JavaScript를 해석해 실행
+  - Chrome/Edge/Node.js → **V8**
+  - Safari → **JavaScriptCore**
+  - Firefox → **SpiderMonkey**
+
+이 챕터는 **렌더링 엔진** 쪽 이야기다. JS 엔진(V8)은 [5-1 챕터](5%EB%8B%A8%EA%B3%84-1-JavaScript-%EC%97%94%EC%A7%84-V8)에서 다룬다.
+
+### 0-3. 이 챕터가 중요한 이유
+
+"왜 우리 앱이 렉 걸리는지" 답하려면 이 파이프라인을 알아야 한다.
+
+- 스크롤이 덜덜거린다 → Composite 단계 이슈
+- 클릭이 먹먹하다 → JS가 메인 스레드를 점유 중
+- 페이지 뜨는 게 느리다 → Critical Rendering Path가 블로킹됨
+- 레이아웃이 갑자기 튄다 → CLS 문제
+
+"왜"에 답하려면 파이프라인이 필요하다.
+
+---
+
+## 1. 전체 흐름
+
+```
+URL 입력
+  ↓
+DNS 조회
+  ↓
+TCP 연결 (+ TLS 핸드셰이크)
+  ↓
+HTTP 요청
+  ↓
+HTML 응답
+  ↓
+파싱 + 렌더링  ← 이 챕터
+```
+
+네트워크 단계까지는 2-1~2-4에서 다뤘다. 이제 브라우저가 **받은 HTML을 화면에 그리는 과정**을 본다.
+
+---
+
+## 2. Critical Rendering Path (CRP)
+
+### 2-1. 6단계
+
+```
+HTML  ─Parse→ DOM  ─┐
+                     ├→ Render Tree → Layout → Paint → Composite
+CSS  ─Parse→ CSSOM ─┘
+```
+
+1. **HTML 파싱 → DOM**
+2. **CSS 파싱 → CSSOM**
+3. DOM + CSSOM → **Render Tree** (보이는 것만)
+4. **Layout** (Reflow): 위치와 크기 계산
+5. **Paint**: 픽셀 채우기
+6. **Composite**: 레이어 합성 (GPU)
+
+이 순서를 **줄줄 말할 수 있어야** 한다.
+
+### 2-2. DOM (Document Object Model)
+
+HTML을 파싱해 얻은 트리 구조.
+
+```html
+<html>
+  <body>
+    <h1>Hello</h1>
+    <p>World</p>
+  </body>
+</html>
+```
+
+↓
+
+```
+html
+└─ body
+   ├─ h1
+   │  └─ "Hello"
+   └─ p
+      └─ "World"
+```
+
+JS에서 `document.querySelector` 같은 API로 조작.
+
+### 2-3. CSSOM (CSS Object Model)
+
+CSS를 파싱해 얻은 트리. DOM과 독립적으로 구성된다.
+
+**CSS는 렌더 블로킹 리소스**: CSSOM이 완성되기 전엔 Render Tree를 만들 수 없다. 그래서 `<link rel="stylesheet">`가 `<head>`에 있으면 HTML 파싱이 끝나도 **CSSOM 대기로 렌더가 지연**된다.
+
+### 2-4. Render Tree
+
+DOM + CSSOM의 결합. **화면에 보이는 노드만** 포함.
+
+- `display: none` → 제외
+- `<head>`, `<meta>` → 제외
+- `visibility: hidden` → **포함** (공간을 차지함)
+
+### 2-5. Layout (Reflow)
+
+각 노드의 **정확한 위치와 크기**를 계산. 뷰포트 크기, 스크롤 위치, 폰트 크기 등이 영향.
+
+루트부터 DFS로 진행. 비용이 큰 단계.
+
+### 2-6. Paint
+
+계산된 박스를 **픽셀로 채움**. 텍스트, 배경색, 그림자, 이미지, 테두리 등.
+
+### 2-7. Composite
+
+요소들이 **여러 레이어**로 분리되어 있으면, GPU가 이들을 합성해 최종 화면을 만든다.
+
+**레이어 승격 조건** (Chrome):
+
+- `transform: translate3d(...)` 또는 `transform: translateZ(0)`
+- `will-change: transform` / `opacity`
+- `video`, `canvas`
+- `position: fixed`의 일부
+- CSS 애니메이션 적용 중
+
+---
+
+## 3. Reflow vs Repaint vs Composite
+
+### 3-1. 비교
+
+| 단계 | 변경 요소 | 비용 | 예시 |
+|------|---------|------|------|
+| **Layout (Reflow)** | 위치/크기 | 높음 | `width`, `left`, `font-size` |
+| **Paint (Repaint)** | 색/가시성 | 중간 | `color`, `background`, `visibility` |
+| **Composite only** | 레이어 변환 | 낮음 | `transform`, `opacity` |
+
+### 3-2. Reflow 트리거
+
+- DOM 노드 추가/삭제
+- 크기/위치 속성 변경 (`width`, `height`, `top`, `left`, `padding`, `margin`, `border`)
+- 폰트 변경
+- 윈도우 리사이즈
+- `offsetHeight`, `getBoundingClientRect()` 같은 **강제 동기 레이아웃** 호출
+
+### 3-3. 강제 동기 레이아웃 (Forced Synchronous Layout)
+
+```javascript
+// 피해야 할 패턴
+for (let i = 0; i < items.length; i++) {
+  items[i].style.width = items[i].offsetWidth + 10 + 'px';
+  // offsetWidth 읽기 → 브라우저가 레이아웃 강제 재계산
+  // 쓰기 → 다시 레이아웃 무효화
+  // 이 루프가 매 반복마다 레이아웃 재계산 (thrashing)
+}
+
+// 해결: 읽기와 쓰기 분리
+const widths = items.map(item => item.offsetWidth);   // 읽기 먼저
+items.forEach((item, i) => {
+  item.style.width = widths[i] + 10 + 'px';            // 쓰기 모아서
+});
+```
+
+브라우저는 DOM 변경을 **배치**해서 한 번에 처리하려 하는데, **중간에 레이아웃 값을 읽으면** 강제로 flush해 재계산한다.
+
+### 3-4. transform vs left
+
+```css
+/* 느림: Layout + Paint + Composite */
+.ball { left: 100px; }
+
+/* 빠름: Composite only */
+.ball { transform: translateX(100px); }
+```
+
+`left`를 애니메이션하면 매 프레임마다 레이아웃 재계산. `transform`은 레이어 변환만 있어 GPU가 처리 → 60fps 유지 쉬움.
+
+**애니메이션은 `transform`과 `opacity`로**.
+
+---
+
+## 4. 렌더링 최적화
+
+### 4-1. will-change
+
+```css
+.card {
+  will-change: transform;
+}
+```
+
+**"곧 변할 거니 미리 레이어 승격해줘"**. 브라우저가 별도 레이어로 분리해 GPU에서 처리.
+
+⚠️ **남용 금지**: 모든 요소에 적용하면 메모리 폭증. 실제 애니메이션 직전에만 켜고 끝나면 끄기.
+
+### 4-2. 배치 처리 (Batching)
+
+React가 state 업데이트를 배치하듯, DOM 조작도 배치가 낫다.
+
+```javascript
+// Bad: 3번 Reflow
+el.style.width = '100px';
+el.style.height = '100px';
+el.style.margin = '10px';
+
+// Good: 1번 Reflow (CSS 클래스)
+el.classList.add('resized');
+
+// Good: 1번 Reflow (off-DOM 수정 후 붙이기)
+const clone = el.cloneNode(true);
+clone.style.width = '100px';
+clone.style.height = '100px';
+clone.style.margin = '10px';
+el.replaceWith(clone);
+```
+
+### 4-3. 가상 DOM의 실체
+
+React는 모든 변경을 가상 DOM에 먼저 반영 → 차이만 실제 DOM에 적용. **배치의 자동화**다.
+
+### 4-4. requestAnimationFrame
+
+```javascript
+function animate() {
+  el.style.transform = `translateX(${x}px)`;
+  x += 1;
+  requestAnimationFrame(animate);
+}
+animate();
+```
+
+**브라우저 렌더 직전에 실행**, 16.6ms 주기 (60fps). `setTimeout`보다 훨씬 매끄럽다.
+
+---
+
+## 5. 리소스 로딩 전략
+
+### 5-1. 기본 동작
+
+- `<script>`: HTML 파싱을 **중단하고** 다운로드·실행 (렌더 블로킹)
+- `<link rel="stylesheet">`: CSSOM이 완성될 때까지 **렌더 블로킹**
+
+### 5-2. async
+
+```html
+<script async src="analytics.js"></script>
+```
+
+- 파싱 중에도 **백그라운드 다운로드**
+- 다운로드 완료 시 **즉시 실행** (파싱 중단 가능)
+- **순서 보장 X**
+
+**용도**: 독립적 스크립트 (광고, 분석). 다른 스크립트와 의존성 없을 때.
+
+### 5-3. defer
+
+```html
+<script defer src="app.js"></script>
+```
+
+- 파싱 중 **백그라운드 다운로드**
+- **HTML 파싱이 끝난 후** 순서대로 실행
+- DOMContentLoaded 이전에 실행
+
+**용도**: 대부분의 앱 스크립트. 순서가 중요한 여러 파일.
+
+### 5-4. module 타입
+
+```html
+<script type="module" src="app.js"></script>
+```
+
+- 기본적으로 `defer`처럼 동작
+- `import`/`export` 사용 가능
+- CORS 적용
+
+### 5-5. preload vs prefetch
+
+```html
+<link rel="preload" href="font.woff2" as="font" crossorigin>
+<link rel="prefetch" href="next-page.js">
+```
+
+- **preload**: 현재 페이지에서 곧 쓸 것. 우선순위 높음.
+- **prefetch**: 다음 페이지에서 쓸 것. 우선순위 낮음, 유휴 시간에 미리 받음.
+- **modulepreload**: ESM 전용 preload.
+- **dns-prefetch**: 곧 접속할 도메인의 DNS 미리 조회.
+- **preconnect**: TCP + TLS까지 미리 수립.
+
+### 5-6. 비교표
+
+| | 파싱 중단 | 다운로드 시작 | 실행 시점 | 순서 |
+|---|---------|----------|---------|------|
+| 기본 `<script>` | O | 파싱 중단 후 | 즉시 | 보장 |
+| `async` | X (실행 시 O) | 즉시 병렬 | 다운 완료 즉시 | 보장 X |
+| `defer` | X | 즉시 병렬 | HTML 파싱 후 | 보장 |
+| `type="module"` | X | 즉시 병렬 | HTML 파싱 후 | 보장 |
+
+---
+
+## 6. 이벤트와 렌더링
+
+### 6-1. DOMContentLoaded vs load
+
+- **DOMContentLoaded**: DOM 파싱 완료. 이미지·스타일시트는 아직일 수 있음.
+- **load**: 모든 리소스 (이미지, 스타일, 아이프레임) 로드 완료.
+
+### 6-2. 렌더 블로킹 자원
+
+- `<link rel="stylesheet">` (기본)
+- `<script>` (async/defer 없음)
+
+이 둘이 내려받지 않으면 렌더 시작 불가. **`<head>`의 용량을 줄이는 것이 성능의 기본**.
+
+---
+
+## 7. FE 성능 지표 (Core Web Vitals 미리보기)
+
+- **FCP (First Contentful Paint)**: 첫 콘텐츠 등장
+- **LCP (Largest Contentful Paint)**: 가장 큰 콘텐츠 등장 (2.5초 이하 목표)
+- **CLS (Cumulative Layout Shift)**: 레이아웃 이동 합 (0.1 이하)
+- **INP (Interaction to Next Paint)**: 상호작용 응답 (200ms 이하)
+
+렌더링 파이프라인을 이해해야 이 지표 개선이 가능하다. (5-6 챕터에서 심화)
+
+---
+
+## 연습 문제
+
+1. Critical Rendering Path 6단계를 순서대로 말하고 각 단계의 역할을 설명하라.
+2. Render Tree에 `display: none` 요소는 포함되지 않지만 `visibility: hidden`은 포함되는 이유를 설명하라.
+3. 다음 코드가 왜 느린지, 어떻게 고쳐야 하는지 서술하라.
+
+```javascript
+for (const item of items) {
+  item.style.width = item.offsetWidth * 2 + 'px';
+}
+```
+
+4. `transform: translateX(100px)`이 `left: 100px`보다 빠른 이유를 CRP 단계로 설명하라.
+5. `<script async>`와 `<script defer>`의 차이를 파싱·다운로드·실행·순서 4가지 축으로 비교하라.
+6. `will-change: transform`을 모든 요소에 넣으면 왜 안 되는지 설명하라.
+7. `requestAnimationFrame`과 `setTimeout(fn, 16)` 중 애니메이션에 더 적합한 것은? 이유와 함께.
+
+---
+
+## 연습 문제 정답
+
+### 1. CRP 6단계
+
+1. **HTML 파싱 → DOM**: HTML을 트리로 변환
+2. **CSS 파싱 → CSSOM**: 스타일 규칙 트리 구성
+3. **Render Tree**: DOM + CSSOM → 렌더할 노드만 합친 트리
+4. **Layout**: 위치와 크기 계산
+5. **Paint**: 픽셀 채우기
+6. **Composite**: 레이어 합성 (GPU)
+
+### 2. display: none vs visibility: hidden
+
+- `display: none`: 렌더 트리에서 **제외**. 공간도 차지 안 함.
+- `visibility: hidden`: 렌더 트리에 **포함**. 공간 차지, 레이아웃 계산 O, 단지 Paint 단계에서 그리지 않음.
+
+### 3. 강제 동기 레이아웃
+
+`item.offsetWidth`를 읽을 때마다 브라우저가 레이아웃을 강제 flush. 쓰기(`width = ...`)는 다음 읽기를 위해 또 무효화 → **Layout thrashing**.
+
+수정:
+
+```javascript
+const widths = items.map(i => i.offsetWidth);
+items.forEach((item, idx) => { item.style.width = widths[idx] * 2 + 'px'; });
+```
+
+### 4. transform vs left
+
+- `left` 변경 → **Layout 재계산 + Paint + Composite** (3단계 전부)
+- `transform` 변경 → **Composite만** (레이어 이미 분리됨, GPU에서 위치만 변경)
+
+Composite만이라 CPU 없이 GPU 혼자 처리, 60fps 유지가 쉽다.
+
+### 5. async vs defer
+
+| 축 | async | defer |
+|-----|-------|-------|
+| 파싱 | 다운로드는 병렬, 실행 시 중단 가능 | 파싱 안 멈춤 |
+| 다운로드 | 즉시 병렬 | 즉시 병렬 |
+| 실행 | 다운로드 완료 즉시 | HTML 파싱 완료 후 |
+| 순서 | 보장 X | 선언 순서대로 |
+
+### 6. will-change 남용
+
+각 요소가 별도 GPU 레이어로 승격. **메모리 폭증**. 레이어가 너무 많으면 오히려 Composite 비용이 증가. 실제 애니메이션 직전에만 적용하고 끝나면 해제.
+
+### 7. rAF vs setTimeout
+
+**`requestAnimationFrame`**.
+
+- 브라우저 렌더 직전에 실행 → 프레임과 동기화
+- 탭이 백그라운드면 자동 중단 (리소스 절약)
+- `setTimeout(fn, 16)`은 렌더와 무관한 타이밍 → 프레임 드롭, 지터
+
+---
+
+## 체크리스트
+
+- Critical Rendering Path 6단계를 순서대로 말할 수 있다
+- DOM과 CSSOM이 각각 무엇인지 안다
+- Render Tree가 무엇을 포함하는지 안다
+- Layout, Paint, Composite의 차이와 비용을 안다
+- Reflow 트리거 조건을 5개 이상 안다
+- 강제 동기 레이아웃이 무엇인지, 어떻게 피하는지 안다
+- `transform`이 `left`보다 빠른 이유를 CRP로 설명할 수 있다
+- `will-change`의 용도와 남용의 해악을 안다
+- `async` / `defer` / `type="module"`을 구분할 수 있다
+- `preload` / `prefetch` / `preconnect`의 차이를 안다
+- DOMContentLoaded와 load의 차이를 안다
+- `requestAnimationFrame`이 `setTimeout`보다 애니메이션에 적합한 이유를 안다
+
+---
+
+**이전**: [2-4. 인증과 인가](2%EB%8B%A8%EA%B3%84-4-%EC%9D%B8%EC%A6%9D%EA%B3%BC-%EC%9D%B8%EA%B0%80) | **다음**: [2-6. 이벤트 루프](2%EB%8B%A8%EA%B3%84-6-%EC%9D%B4%EB%B2%A4%ED%8A%B8-%EB%A3%A8%ED%94%84)

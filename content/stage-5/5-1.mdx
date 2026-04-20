@@ -1,0 +1,476 @@
+
+> **목표**: **V8 엔진의 파이프라인 (Parser → Ignition → Sparkplug → TurboFan), Hidden Class, Inline Cache, Deoptimization** 을 이해해 JS 성능 문제를 엔진 수준에서 설명할 수 있어야 한다.
+
+* * *
+
+## 0. "JS 엔진"이란 정확히 뭔가 — 초심자용
+
+### 0-1. 내가 쓴 JS는 누가 실행하는가
+
+```js
+console.log("hello");
+```
+
+이 한 줄이 화면에 나타날 때까지, 내부적으로는:
+
+1. 누군가가 이 **텍스트**를 읽음
+2. 문법에 맞는지 **해석**
+3. 컴퓨터가 이해할 수 있는 **기계어**로 바꿈
+4. 실행
+
+이 전부를 담당하는 것이 **JavaScript 엔진**. Chrome에는 **V8** 이 들어있고, Safari에는 **JavaScriptCore**, Firefox에는 **SpiderMonkey** 가 들어있다. **브라우저 ≠ JS 엔진** — 브라우저는 엔진을 "포함"한 더 큰 개념.
+
+### 0-2. V8이 왜 이렇게 유명한가
+
+- **Chrome** 이 쓰는 엔진 (전 세계 브라우저 점유율 1위)
+- **Node.js** 도 V8을 떼어 내 서버에서 씀
+- **Electron** (VSCode, Slack, Discord 등) 도 V8 기반
+- **Deno, Bun(일부)** 도 관련
+
+**"요즘 JS 개발자가 쓰는 거의 모든 런타임이 V8 위에 있다."** 그래서 V8을 이해하는 것이 곧 JS 성능 이해.
+
+### 0-3. "인터프리터"와 "컴파일러" 한 줄 정리
+
+| 방식 | 한 줄 | 장점 | 단점 |
+|---|---|---|---|
+| 인터프리터 | 한 줄씩 바로 실행 | 즉시 시작 | 매번 해석해서 느림 |
+| 컴파일러 | 전체를 기계어로 미리 변환 | 빠른 실행 | 시작 전 시간 필요 |
+| **JIT (Just-In-Time)** | **실행하면서 자주 쓰는 부분만 컴파일** | 둘 다 | 복잡함 |
+
+V8은 **JIT 컴파일러**. 빠른 시작 + 빠른 실행을 동시에 노린다.
+
+### 0-4. 이 장을 배우면 설명할 수 있는 질문들
+
+- "객체 속성을 동적으로 추가하면 왜 느려지나?" → Hidden Class 무효화
+- "같은 코드인데 두 번째 호출부터 빨라지는 느낌은?" → Inline Cache
+- "for-of vs forEach vs for문 속도 차이 왜 나나?"
+- "React 컴포넌트의 re-render가 왜 비용이 드나?" — JS 엔진 레벨
+
+### 0-5. 5단계의 위치
+
+5단계는 **"프론트엔드 런타임 내부"** 를 여는 단계. 이 장(5-1)은 그 문을 여는 열쇠.
+
+- **5-1 (지금)**: JS가 어떻게 실행되는가
+- **5-2**: 실행 중 변수·스코프·클로저는 어떻게 작동하나
+- **5-3**: 컴파일러가 코드를 어떻게 파싱·변환하나
+- **5-4**: Webpack/Vite 같은 번들러의 내부
+- **5-5~5-8**: 렌더링·성능·프레임워크 내부
+
+지금까지의 CS 지식을 **"프론트 특유의 내부"** 에 적용하는 챕터들.
+
+---
+
+## 1. JS 엔진들
+
+| 엔진 | 사용처 | 특징 |
+|------|--------|------|
+| **V8** | Chrome, Node.js, Edge, Electron | Ignition + Sparkplug + TurboFan |
+| **SpiderMonkey** | Firefox | Baseline Interpreter + WarpMonkey |
+| **JavaScriptCore** | Safari | LLInt + Baseline + DFG + FTL |
+| **Hermes** | React Native | AoT 바이트코드, 작은 바이너리 |
+| **QuickJS** | 임베디드 | 작은 풋프린트 |
+
+V8이 가장 영향력 있음 → 본 장은 V8 중심.
+
+---
+
+## 2. V8 파이프라인
+
+```
+JS Source
+    │
+    ▼
+┌───────────┐
+│  Parser   │ → AST (Abstract Syntax Tree)
+└───────────┘
+    │
+    ▼
+┌───────────┐
+│ Ignition  │ 바이트코드 컴파일 + 인터프리팅
+└───────────┘
+    │  (warm 코드)
+    ▼
+┌───────────┐
+│ Sparkplug │ Baseline JIT (V8 9.1+, 2021)
+└───────────┘
+    │  (hot 코드)
+    ▼
+┌───────────┐
+│ TurboFan  │ Optimizing Compiler
+└───────────┘
+    │
+    │ (가정 깨지면 deopt)
+    ▼
+  Ignition 으로 복귀
+```
+
+### Lazy Parsing
+
+- 함수를 모두 파싱하면 느림
+- V8은 **선언만** pre-parse, **호출 시** full parse
+- IIFE `(function(){...})()` 는 즉시 호출이 확실 → 처음부터 full parse
+
+### Ignition
+
+- 2016년 도입
+- AST → **바이트코드** (스택 기반 가상 머신)
+- 시작 속도 개선, 메모리 절약
+
+### Sparkplug (2021)
+
+- 바이트코드 → **비최적화 네이티브 코드** 를 거의 번역만으로 생성
+- 최적화 없이 네이티브 실행 속도 확보
+- TurboFan의 대기 시간 채움
+
+### TurboFan
+
+- 타입 추론, 인라이닝, 이스케이프 분석, 죽은 코드 제거 등 **최적화 컴파일**
+- 기반 IR: **Sea of Nodes**
+- 타입 가정 (예: "이 변수는 항상 Smi")을 세워 최적화
+- **Deoptimization**: 가정이 깨지면 Ignition으로 돌아가 재실행
+
+---
+
+## 3. Hidden Class (Shape / Map)
+
+JS는 동적 타입이지만 V8은 객체의 **"모양"** 을 추적해 속성 접근을 O(1)로 만든다.
+
+```js
+function Point(x, y) {
+  this.x = x;  // Hidden Class C0 → C1 (x 추가)
+  this.y = y;  // Hidden Class C1 → C2 (y 추가)
+}
+const p1 = new Point(1, 2);  // C2
+const p2 = new Point(3, 4);  // C2 (같은 모양)
+```
+
+### 내부 구조
+
+- 객체 헤더에 `[Map]` 필드 → 해당 Hidden Class 포인터
+- Hidden Class에 속성명 → 오프셋 매핑
+- 속성 접근 = "Hidden Class 확인 후 오프셋으로 점프"
+
+### Transition Tree
+
+```
+C0 (empty)
+  │ +x
+  ▼
+C1 (x)
+  │ +y
+  ▼
+C2 (x, y)
+```
+
+생성 순서가 같으면 같은 Class로 수렴.
+
+---
+
+## 4. Inline Cache (IC)
+
+같은 Hidden Class의 객체에 반복 속성 접근 시 **오프셋을 캐시**.
+
+```js
+function getX(obj) {
+  return obj.x;  // IC 위치
+}
+
+getX({x: 1, y: 2});      // Hidden Class C2, x의 오프셋 = 0 → 캐시
+getX({x: 3, y: 4});      // 같은 C2 → 캐시 적중, 즉시 오프셋 사용
+```
+
+### IC 상태
+
+| 상태 | shape 수 | 성능 |
+|------|----------|------|
+| **Uninitialized** | 0 | 처음 실행 |
+| **Monomorphic** | 1 | 가장 빠름 |
+| **Polymorphic** | 2~4 | 빠름 |
+| **Megamorphic** | 5+ | 느림 (테이블 lookup) |
+
+### 성능에 주는 영향
+
+- Monomorphic vs Megamorphic: **10~100배 차이**
+- 같은 함수에 다양한 shape 객체를 흘리면 IC가 격하됨
+
+---
+
+## 5. Hidden Class 깨는 패턴
+
+### ① 속성 순서 다름
+
+```js
+const a = {x:1, y:2};  // C: x→y
+const b = {y:2, x:1};  // C': y→x  ← 다른 Class
+```
+
+### ② 나중에 속성 추가/삭제
+
+```js
+const p = {x: 0, y: 0};
+p.z = 5;         // 새 Hidden Class로 transition
+delete p.x;      // Dictionary Mode (큰 성능 격하)
+```
+
+### ③ 구멍 생기기 (배열)
+
+```js
+const arr = [1, 2, 3];        // PACKED_SMI_ELEMENTS
+arr[10] = 4;                  // HOLEY_SMI_ELEMENTS
+arr[2] = 'x';                 // PACKED_ELEMENTS (타입 혼재)
+delete arr[0];                // HOLEY_ELEMENTS
+```
+
+한 번 격하되면 **복구되지 않는다**.
+
+### 최적화 팁
+
+```js
+// 좋음 — 생성자로 모든 필드 초기화
+class Point {
+  constructor(x, y) {
+    this.x = x;
+    this.y = y;
+  }
+}
+```
+
+---
+
+## 6. 숫자 표현 — Smi vs HeapNumber
+
+- **Smi (Small Integer)**: 31-bit int, 포인터 태그로 표현 → 힙 할당 없음
+- **HeapNumber**: 64-bit double, 힙에 박스됨
+- Smi 범위 초과(2³¹ 이상) 또는 소수 → HeapNumber
+
+```js
+let x = 42;       // Smi
+x = 42.5;         // HeapNumber — deopt 가능
+x |= 0;           // 강제 int32 → Smi 복귀
+```
+
+### Element Kinds 격하 순서
+
+```
+PACKED_SMI → PACKED_DOUBLE → PACKED_ELEMENTS
+    ↓            ↓              ↓
+HOLEY_SMI  → HOLEY_DOUBLE → HOLEY_ELEMENTS → DICTIONARY
+```
+
+---
+
+## 7. 최적화 사례 — 인라이닝
+
+```js
+function square(x) { return x * x; }
+
+for (let i = 0; i < 1e6; i++) {
+  square(i);  // TurboFan이 인라인 → 함수 호출 오버헤드 제거
+}
+```
+
+### 인라인 조건
+
+- 작은 함수 (바이트코드 크기 기준)
+- 호출 사이트가 Monomorphic
+- 재귀는 제한적 인라인
+
+### Escape Analysis
+
+```js
+function dist(x1, y1, x2, y2) {
+  const p1 = {x: x1, y: y1};
+  const p2 = {x: x2, y: y2};
+  return Math.hypot(p2.x - p1.x, p2.y - p1.y);
+}
+```
+
+`p1, p2` 객체가 함수 밖으로 escape하지 않음 → **힙 할당 생략**, 레지스터로만 처리.
+
+---
+
+## 8. Deoptimization (Deopt)
+
+TurboFan의 **가정이 깨지면** 최적화 코드를 버리고 Ignition으로 복귀.
+
+### 원인
+
+```js
+function add(a, b) { return a + b; }
+
+for (let i = 0; i < 1e6; i++) add(i, i);  // "둘 다 Smi"로 최적화
+add('hi', 'there');                       // 가정 깨짐 → deopt
+```
+
+### 자주 일으키는 패턴
+
+- 같은 함수에 다양한 타입 인자
+- `undefined` / `null` 이 섞여 들어감
+- `arguments` 객체 누수
+- `try/catch` (일부 구버전 V8)
+- `with`, `eval` — 최적화 자체 금지
+
+### 확인 방법
+
+```bash
+node --trace-opt --trace-deopt app.js
+```
+
+---
+
+## 9. 메모리 — V8의 힙 구조 (3-3장 복습)
+
+```
+Young Generation       Old Generation
+┌─────┐ ┌─────┐       ┌──────────────┐
+│From │⇄│ To  │ ───▶  │ Old Space     │
+└─────┘ └─────┘       │ Large Objects │
+  Scavenge            │ Code Space    │
+                      └──────────────┘
+                        Mark-Compact
+```
+
+### Orinoco (V8의 현재 GC)
+
+- Concurrent Marking: 별도 스레드에서 Mark
+- Parallel Scavenge: 멀티 코어
+- Incremental Sweep: 나눠서 sweep
+- 주 스레드 정지 시간을 **1~5ms** 수준으로 유지
+
+---
+
+## 10. JIT 워밍업과 벤치마크
+
+### 단계별 성능
+
+```
+첫 실행: Ignition (수백 ms)
+~100회: Sparkplug (수십 ms)
+~1000회: TurboFan (수 ms)
+deopt:   Ignition 복귀 (수백 ms)
+재최적화: TurboFan (수 ms)
+```
+
+### 벤치마크 시 주의
+
+```js
+// 바른 마이크로 벤치마크
+function bench(fn, iterations) {
+  for (let i = 0; i < 1000; i++) fn();         // warmup
+  const start = performance.now();
+  for (let i = 0; i < iterations; i++) fn();
+  return performance.now() - start;
+}
+```
+
+---
+
+## 11. WebAssembly와의 관계
+
+- V8은 WASM도 실행 (**Liftoff → TurboFan** 파이프라인)
+- JS ↔ WASM 호출은 경계 비용 존재 — 세밀한 루프는 한쪽에 몰기
+- WASM SIMD, Threads로 CPU 집약 작업 가속
+
+---
+
+## 12. ⚠️ 자주 하는 실수
+
+| 실수 | 영향 |
+|------|------|
+| 객체 속성을 나중에 추가·삭제 | Hidden Class 폭발, Megamorphic IC |
+| `arguments` 를 다른 함수로 넘김 | 최적화 포기 → rest parameter `...args` 사용 |
+| 숫자 배열에 문자열 섞음 | PACKED → HOLEY_ELEMENTS 격하 |
+| sparse 배열 | Dictionary Mode 격하 |
+| `for...in` 으로 순회 | 프로토타입까지 훑음, 느림 |
+| `try/catch` 안의 핫 루프 | 일부 환경에서 최적화 못 함 — 래핑 레벨 고려 |
+
+---
+
+## 13. 연습 문제
+
+**Q1.** V8의 Ignition과 TurboFan의 역할 차이는?
+
+<details>
+<summary>정답</summary>
+
+- **Ignition**: AST를 **바이트코드** 로 변환하고 인터프리터로 실행. 시작이 빠르고 메모리 적음. 프로파일링 데이터 수집.
+- **TurboFan**: 핫 코드를 **최적화된 네이티브 코드** 로 컴파일. 인라이닝, 타입 추론, 이스케이프 분석 등으로 C++ 수준 성능 목표. 대신 컴파일 비용 있음.
+
+</details>
+
+**Q2.** Hidden Class가 왜 성능에 중요한가?
+
+<details>
+<summary>정답</summary>
+
+객체 속성 접근을 **해시 테이블 검색이 아닌 오프셋 기반 직접 접근** 으로 만들어 준다. Inline Cache와 결합하면 동일 shape 객체에 대한 속성 조회가 C 구조체 필드 접근처럼 한두 명령어로 끝남. 반대로 shape가 자주 바뀌면 IC가 megamorphic 화되며 10~100배 느려진다.
+
+</details>
+
+**Q3.** `delete obj.key` 가 거의 항상 나쁜 이유는?
+
+<details>
+<summary>정답</summary>
+
+객체가 **Dictionary Mode** 로 격하됨. Hidden Class 기반 O(1) 속성 접근을 포기하고 해시 맵 검색으로 전환. 관련 IC들이 polymorphic/megamorphic 화되어 주변 코드 성능까지 영향. 복구되지 않음. 대안: 값을 `undefined` 로 두거나 Map 사용.
+
+</details>
+
+**Q4.** Deoptimization을 유발하는 대표 패턴 3가지는?
+
+<details>
+<summary>정답</summary>
+
+1. 같은 함수에 **다양한 타입** 인자 (Smi → string)
+2. **숨겨진 클래스 다양성** (다른 shape의 객체)
+3. `arguments` 누수, `with`, `eval`, 특정 환경의 `try/catch`
+4. 배열 Element Kind 격하 (PACKED → HOLEY → DICT)
+
+</details>
+
+**Q5.** 같은 객체를 생성자 vs 리터럴로 만들 때 성능 차이가 있는가?
+
+<details>
+<summary>정답</summary>
+
+클래스/생성자로 만들면 V8이 **공유 Hidden Class** 를 확실히 재사용한다. 리터럴도 속성 순서가 같으면 같은 Class가 되지만, 조건 분기로 속성을 추가하면 다른 Class가 될 위험이 있다. 핫 코드에서는 **클래스로 일관성 확보** 가 안전.
+
+</details>
+
+**Q6.** Smi와 HeapNumber의 차이와 성능 의미는?
+
+<details>
+<summary>정답</summary>
+
+- Smi: 31-bit int가 포인터 태그 표현으로 **힙 할당 없이** 레지스터에 보관. 매우 빠름.
+- HeapNumber: 64-bit double이 **힙에 박스** → 메모리 + GC 압력
+
+핫 루프에서 Smi를 유지하는 것이 중요. 비트 연산 `| 0` 이나 `Math.trunc` 로 강제 int 캐스팅 가능.
+
+</details>
+
+**Q7.** JIT 워밍업을 왜 고려해야 하는가?
+
+<details>
+<summary>정답</summary>
+
+첫 실행은 Ignition에서 수행되어 이후보다 **10~100배 느릴 수 있다**. 마이크로 벤치마크가 이 구간을 포함하면 평균이 왜곡됨. 실서비스 관점에서도 **첫 화면 렌더링** 이 JIT 미적용 구간이므로 TTI (Time to Interactive) 에 영향. 그래서 큰 번들을 피하고 코드 분할, 적극적 프리로드를 쓴다.
+
+</details>
+
+---
+
+## 14. 체크리스트
+
+- [ ] V8 파이프라인 4단계(Parser → Ignition → Sparkplug → TurboFan) 를 설명한다
+- [ ] Hidden Class와 IC의 작동 원리를 안다
+- [ ] Monomorphic ↔ Polymorphic ↔ Megamorphic 성능 차이를 안다
+- [ ] Hidden Class를 깨는 패턴 3가지를 피한다
+- [ ] Smi/HeapNumber, Element Kinds 격하 규칙을 안다
+- [ ] Deoptimization을 유발하는 패턴을 안다
+- [ ] V8 GC (Orinoco) 의 Concurrent/Incremental 특성을 안다
+- [ ] JIT 워밍업을 고려해 벤치마크/최적화한다
+
+---
+
+[← 4-6. FE가 자주 마주치는 이슈](4단계-6-FE가-자주-마주치는-이슈) | [5-2. 실행 컨텍스트·스코프·클로저 →](5단계-2-실행-컨텍스트-스코프-클로저)

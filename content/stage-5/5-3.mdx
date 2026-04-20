@@ -1,0 +1,576 @@
+
+> **목표**: **Lexer → Parser → AST → Transformer → CodeGen** 파이프라인을 이해하고, Babel·SWC·ESLint·Prettier가 내부적으로 어떻게 동작하는지 설명할 수 있어야 한다. 커스텀 ESLint 규칙, Babel 플러그인을 작성할 기초를 얻는다.
+
+* * *
+
+## 0. 컴파일러? AST? 먼저 감부터 — 초심자용
+
+### 0-1. "컴파일러" = 코드 번역기
+
+**컴파일러(Compiler)** = "한 언어로 쓴 코드를 다른 언어로 변환해주는 프로그램".
+
+- C/C++ 컴파일러: C 코드 → 기계어
+- **Babel**: 최신 JS → 구형 브라우저용 JS
+- **TypeScript**: TS 코드 → JS 코드
+- **SWC / esbuild**: 위와 같지만 Rust/Go로 작성돼 훨씬 빠름
+
+프론트 개발자가 매일 쓰는 도구 대부분이 **컴파일러**. 의식 못 하고 쓸 뿐.
+
+### 0-2. AST가 뭔데
+
+**AST (Abstract Syntax Tree, 추상 구문 트리)** = 코드를 **트리 구조**로 표현한 것.
+
+```js
+const x = 1 + 2;
+```
+
+이 한 줄을 AST로 그리면:
+
+```
+VariableDeclaration
+├─ kind: "const"
+└─ declarations:
+   └─ VariableDeclarator
+      ├─ id: Identifier (name: "x")
+      └─ init: BinaryExpression
+         ├─ operator: "+"
+         ├─ left: Literal (value: 1)
+         └─ right: Literal (value: 2)
+```
+
+문자열 `const x = 1 + 2;` 는 컴퓨터에게 "글자 배열"일 뿐이다. 이 모호한 글자를 **의미 있는 구조**로 바꾼 게 AST. [1-6](1단계-6-연결-리스트-트리-그래프.md)의 **트리**가 여기서 실전 등장.
+
+### 0-3. 왜 이걸 알아야 하나 — 실전 용례
+
+| 도구 | 무슨 일을 하나 | AST가 왜 필요한가 |
+|---|---|---|
+| **Babel** | ES2022 → ES5 | AST를 변환해서 다시 코드로 |
+| **TypeScript** | 타입 체크 | AST를 순회하며 타입 추론 |
+| **ESLint** | 린트 (코딩 규칙 검사) | AST를 보고 "이 패턴 금지" 판별 |
+| **Prettier** | 자동 포맷팅 | AST를 다시 일관된 스타일로 출력 |
+| **SWC / esbuild** | 빠른 Babel 대체 | 같은 파이프라인을 네이티브로 |
+| **React Compiler** | 자동 메모이제이션 | JSX를 분석해 최적화 주입 |
+
+### 0-4. 컴파일러의 5단계 미리보기
+
+```
+1. Lexer      : "글자 → 토큰"        (const, x, =, 1, +, 2, ;)
+2. Parser     : "토큰 → AST"          (트리로 구조화)
+3. Transformer: "AST 조작"             (예: const → var)
+4. Optimizer  : (선택) "최적화"        (죽은 코드 제거 등)
+5. CodeGen    : "AST → 문자열 코드"    (다시 출력)
+```
+
+이 장에서 각 단계를 하나씩 구체 예제와 함께 본다.
+
+### 0-5. FE 개발자가 이 장을 배우면 할 수 있는 것
+
+- **Custom ESLint 규칙** 작성 (팀 컨벤션 자동 강제)
+- **Babel 플러그인** 작성 (특정 API 호출을 자동 변환)
+- **codemod** (코드 일괄 변환 스크립트) — 프로젝트 마이그레이션에 필수
+- `ast-grep`, `jscodeshift` 같은 도구 이해
+- **에러 메시지** 를 읽을 줄 알게 됨 (예: "Unexpected token" 의 의미)
+
+---
+
+## 1. 컴파일러의 5단계
+
+```
+Source Code
+    │
+    ▼
+┌─────────────┐
+│   Lexer     │ 토큰화 (문자열 → Token 배열)
+└─────────────┘
+    │
+    ▼
+┌─────────────┐
+│   Parser    │ Token → AST
+└─────────────┘
+    │
+    ▼
+┌─────────────┐
+│ Transformer │ AST 수정 (선택적)
+└─────────────┘
+    │
+    ▼
+┌─────────────┐
+│  CodeGen    │ AST → 코드 (또는 바이트코드)
+└─────────────┘
+    │
+    ▼
+Output
+```
+
+---
+
+## 2. Lexer (Tokenizer)
+
+입력 문자열을 **의미 있는 토큰** 으로 분리.
+
+```js
+const input = 'let x = 42;';
+
+// 토큰 결과
+[
+  { type: 'Keyword',    value: 'let' },
+  { type: 'Identifier', value: 'x' },
+  { type: 'Punctuator', value: '=' },
+  { type: 'Numeric',    value: '42' },
+  { type: 'Punctuator', value: ';' }
+]
+```
+
+### 역할
+
+- 공백·주석 제거
+- 키워드·식별자 구분
+- 숫자·문자열·정규식 리터럴 인식
+- 자동 세미콜론 삽입(ASI) 지원
+
+---
+
+## 3. Parser
+
+토큰 스트림을 **트리** 로 조립.
+
+### AST (Abstract Syntax Tree)
+
+```js
+let x = 42;
+
+// AST
+{
+  type: 'VariableDeclaration',
+  kind: 'let',
+  declarations: [{
+    type: 'VariableDeclarator',
+    id:   { type: 'Identifier', name: 'x' },
+    init: { type: 'Literal', value: 42 }
+  }]
+}
+```
+
+### AST 표기 표준
+
+- **ESTree** (ECMAScript AST 스펙) — ESLint, Babel, Prettier 공통
+- **SWC AST** — Rust, ESTree 변형
+- **TypeScript AST** — TypeScript Compiler 자체 포맷
+
+### 파서 종류
+
+| 파서 | 특징 |
+|------|------|
+| Top-Down (Recursive Descent) | 직관적, 수동 작성 |
+| Bottom-Up (LR) | 강력, 자동 생성 (yacc, bison) |
+| PEG | 우선순위 명시적 |
+| Pratt | 연산자 우선순위 처리 간결 |
+
+V8, SWC, Babel 은 **수동 재귀 하향 파서** (성능·에러 메시지 이유).
+
+### AST Explorer
+
+https://astexplorer.net — 브라우저에서 코드 → AST 시각화.
+
+---
+
+## 4. Transformer (AST Transformation)
+
+AST를 순회하며 수정.
+
+### Visitor Pattern
+
+```js
+// Babel 플러그인 예
+module.exports = () => ({
+  visitor: {
+    Identifier(path) {
+      if (path.node.name === 'oldName') {
+        path.node.name = 'newName';
+      }
+    }
+  }
+});
+```
+
+### 흔한 변환
+
+| 목적 | 예 |
+|------|-----|
+| 문법 다운그레이드 | optional chaining `?.` → `x && x.y` |
+| 모듈 변환 | ESM ↔ CommonJS |
+| JSX | `<div>` → `React.createElement('div')` |
+| TypeScript | 타입 제거 + 문법 변환 |
+| 주석 기반 매크로 | `/* @__PURE__ */` 힌트 |
+| 국제화 | `t('key')` 추출 |
+
+---
+
+## 5. Code Generation
+
+AST → 문자열.
+
+### 관심사
+
+- **Source Map** 생성 — 원본 위치와 출력 위치 매핑
+- **포맷팅** — prettier는 AST 재출력이 본질
+- **최적화** — 죽은 코드 제거, 트리 쉐이킹
+
+---
+
+## 6. Babel
+
+JS 컴파일러. **플러그인 시스템** 중심.
+
+### 파이프라인
+
+```
+@babel/parser → @babel/traverse → @babel/generator
+                     ↑
+                 Plugins / Presets
+```
+
+### 플러그인 예
+
+```js
+// Object spread를 Object.assign 으로
+// 입력: { ...a, ...b }
+// 출력: Object.assign({}, a, b)
+```
+
+### Preset
+
+플러그인 묶음:
+- `@babel/preset-env`: 브라우저 타겟별 다운그레이드
+- `@babel/preset-react`: JSX
+- `@babel/preset-typescript`: TS 문법 제거
+
+### .babelrc 예
+
+```json
+{
+  "presets": [
+    ["@babel/preset-env", { "targets": "> 0.5%, not dead" }],
+    "@babel/preset-react"
+  ],
+  "plugins": ["@babel/plugin-transform-runtime"]
+}
+```
+
+### Browserslist
+
+- 공통 타겟 정의 (`package.json` 의 `browserslist`)
+- Babel, Autoprefixer 등이 공유 사용
+
+---
+
+## 7. SWC와 esbuild — Rust/Go 네이티브 컴파일러
+
+### SWC
+
+- Rust 작성, **Babel보다 20~70배 빠름**
+- Next.js 12+ 기본, Vite도 옵션
+- Babel 플러그인과 다른 형식
+
+### esbuild
+
+- Go 작성
+- 번들링 + 트랜스파일 통합
+- 설정 단순, 극한 속도
+
+### 왜 빠른가
+
+1. 네이티브 언어 (Rust/Go)
+2. 멀티스레드 파싱·변환
+3. AST 구조 최적화 (가비지 수집 없음)
+
+---
+
+## 8. TypeScript Compiler (tsc)
+
+- 자체 AST 포맷
+- **타입 체크** 가 주 업무 — 변환은 부수적
+- 느린 편 → 타입 제거만 필요하면 Babel/SWC 사용
+
+### Language Service
+
+- VSCode 등 IDE가 사용
+- AST + 타입 정보로 자동완성, 리팩토링, jump-to-definition 제공
+
+---
+
+## 9. ESLint
+
+**정적 분석 도구**. AST 순회로 규칙 위반 탐지.
+
+### 규칙 (Rule) 예 — no-unused-vars
+
+```js
+module.exports = {
+  create(context) {
+    return {
+      VariableDeclarator(node) {
+        const name = node.id.name;
+        const scope = context.getScope();
+        const variable = scope.variables.find(v => v.name === name);
+        if (variable && variable.references.length === 1) {
+          context.report({ node, message: `'${name}' is never used` });
+        }
+      }
+    };
+  }
+};
+```
+
+### 자체 규칙 작성
+
+- 프로젝트 컨벤션 강제
+- 보안 (eval 금지 등)
+- 마이그레이션 (옛 API 금지)
+
+---
+
+## 10. Prettier
+
+**AST 재출력** 기반 포매터.
+
+### 동작
+
+1. 코드 → AST
+2. AST → **doc IR** (박스 모델 같은 추상 레이아웃)
+3. 라인 너비에 맞춰 출력
+
+### 왜 설정이 적은가
+
+- 의도적으로 취향 옵션 최소화
+- 팀 간 논쟁 제거
+
+---
+
+## 11. 실전 — AST 기반 코드모드 (Codemod)
+
+대규모 리팩토링에 사용.
+
+### jscodeshift
+
+```js
+export default (fileInfo, api) => {
+  const j = api.jscodeshift;
+  return j(fileInfo.source)
+    .find(j.ImportDeclaration, { source: { value: 'old-lib' } })
+    .forEach(path => {
+      path.node.source.value = 'new-lib';
+    })
+    .toSource();
+};
+```
+
+```bash
+npx jscodeshift -t mod.js src/
+```
+
+### ts-morph
+
+TypeScript AST를 객체지향적으로 조작.
+
+### 사용 예
+
+- React 16 → 18 자동 마이그레이션
+- Deprecated API 치환
+- 코드 스타일 대량 변경
+- Prop 이름 변경
+
+---
+
+## 12. JSX는 어떻게 변환되는가
+
+```jsx
+// 입력
+<Button color="red" onClick={handleClick}>
+  Click
+</Button>
+
+// 출력 (react)
+React.createElement(Button, {
+  color: 'red',
+  onClick: handleClick
+}, 'Click');
+
+// 출력 (react/jsx-runtime, 새 변환)
+import { jsx } from 'react/jsx-runtime';
+jsx(Button, {
+  color: 'red',
+  onClick: handleClick,
+  children: 'Click'
+});
+```
+
+- React 17+부터 `import React` 불필요 (자동 JSX 런타임)
+
+---
+
+## 13. Source Map
+
+```
+//# sourceMappingURL=bundle.js.map
+```
+
+### 내용
+
+```json
+{
+  "version": 3,
+  "sources": ["src/app.ts"],
+  "mappings": "AAAA,SAASA,EAAET,CAAM;..."
+}
+```
+
+- VLQ 인코딩으로 원본 파일·라인·컬럼·심볼 매핑
+- DevTools가 변환된 코드를 원본으로 보여줌
+- Sentry 등 에러 모니터링이 원본 스택 트레이스 생성에 사용
+
+### 종류
+
+| 종류 | 용도 |
+|------|------|
+| `source-map` | 완전 (프로덕션) |
+| `inline-source-map` | 번들에 포함 (개발) |
+| `hidden-source-map` | URL 주석 없음, 별도 배포 (Sentry용) |
+| `eval-source-map` | 빠른 개발 빌드 |
+
+---
+
+## 14. 실전 — Babel 플러그인 작성
+
+### 예: console.log 제거
+
+```js
+module.exports = () => ({
+  name: 'remove-console',
+  visitor: {
+    CallExpression(path) {
+      const callee = path.node.callee;
+      if (
+        callee.type === 'MemberExpression' &&
+        callee.object.name === 'console' &&
+        callee.property.name === 'log'
+      ) {
+        path.remove();
+      }
+    }
+  }
+});
+```
+
+---
+
+## 15. ⚠️ 자주 하는 실수
+
+| 실수 | 결과 |
+|------|------|
+| `sourceType: 'script'` 로 ESM 파싱 | `import` 에러 |
+| AST를 배열 index로 수정 | 인덱스 꼬임 → path API 사용 |
+| traverse 중 node를 직접 수정 | visitor 루프 깨짐 |
+| 변환 후 source map 미생성 | 디버깅 지옥 |
+| 코드모드를 전량 한 번에 적용 | 리뷰 불가능 → 작은 단위로 |
+
+---
+
+## 16. 연습 문제
+
+**Q1.** Lexer와 Parser의 차이는?
+
+<details>
+<summary>정답</summary>
+
+- **Lexer**: 문자열 → 토큰 시퀀스. 의미 없는 개별 단위(키워드, 식별자, 리터럴)를 분리. 문법 구조는 신경 안 씀.
+- **Parser**: 토큰 시퀀스 → AST. 문법 규칙에 따라 토큰을 조립해 트리 구조 구성.
+
+</details>
+
+**Q2.** AST와 CST (Concrete Syntax Tree) 의 차이는?
+
+<details>
+<summary>정답</summary>
+
+- **CST**: 원본 소스의 **모든 세부사항** (괄호, 공백, 주석 위치) 을 보존하는 파스 트리.
+- **AST**: 의미에 중요한 구조만 남긴 **추상** 트리. 괄호처럼 의미에 영향 없는 요소 제거.
+
+ESLint, Babel은 AST만으로 충분. Prettier는 주석 보존을 위해 일부 CST 정보 필요.
+
+</details>
+
+**Q3.** Babel과 SWC의 차이는?
+
+<details>
+<summary>정답</summary>
+
+- **Babel**: JavaScript로 작성. 플러그인 생태계 풍부. 느리다.
+- **SWC**: Rust로 작성. 멀티스레드 병렬화. **20~70배 빠름**. 플러그인 생태계는 작다.
+
+Next.js는 공식 SWC 전환, Vite도 옵션. Babel은 레거시·복잡한 커스텀 변환이 필요한 프로젝트.
+
+</details>
+
+**Q4.** Prettier가 설정 옵션이 적은 이유는?
+
+<details>
+<summary>정답</summary>
+
+**팀 간 스타일 논쟁을 원천 차단**하려는 철학. 옵션이 많을수록 프로젝트마다 다른 스타일이 생겨 코드베이스 이동 시 혼란. Prettier는 "의견 있는(opinionated)" 도구를 지향해 소수 옵션만 제공.
+
+</details>
+
+**Q5.** ESLint 커스텀 규칙이 필요한 상황은?
+
+<details>
+<summary>정답</summary>
+
+1. 회사 고유 컨벤션 (예: API 호출은 반드시 `services/` 경유)
+2. 마이그레이션 중 특정 API 금지 (`moment` 사용 금지)
+3. 보안 (`eval`, `dangerouslySetInnerHTML` 사용 시 경고)
+4. 접근성 (커스텀 UI 컴포넌트에 aria-* 요구)
+5. 성능 (`<img>` 에 loading="lazy" 강제)
+
+</details>
+
+**Q6.** Source Map이 왜 보안 이슈가 될 수 있는가?
+
+<details>
+<summary>정답</summary>
+
+Source Map은 **원본 코드를 복원** 가능. 프로덕션 번들과 함께 공개되면 로직·알고리즘·주석이 그대로 노출된다. 해결:
+1. 프로덕션에서 source map을 **공개하지 않음** (hidden-source-map)
+2. Sentry 같은 모니터링 툴에 별도 업로드
+3. 민감 코드는 서버 사이드로 분리
+
+</details>
+
+**Q7.** JSX가 런타임에 `React.createElement` 를 호출하지 않는 새 JSX Transform의 이점은?
+
+<details>
+<summary>정답</summary>
+
+1. `import React` 불필요 → 번들 크기 소폭 감소
+2. 성능: `jsx()` 함수는 React의 내부 최적화 호출, `createElement` 보다 약간 빠름
+3. 정적 children 처리 최적화
+4. React Native, Preact 등 다른 런타임 연결 용이
+
+</details>
+
+---
+
+## 17. 체크리스트
+
+- [ ] 컴파일러 5단계(Lexer~CodeGen) 를 설명한다
+- [ ] AST의 용도와 ESTree 스펙을 안다
+- [ ] Babel/SWC/esbuild/tsc의 차이를 안다
+- [ ] Visitor 패턴으로 AST를 순회·수정할 수 있다
+- [ ] JSX → createElement / jsx-runtime 변환을 이해한다
+- [ ] Source Map의 역할과 종류를 안다
+- [ ] AST Explorer에서 원하는 노드 타입을 찾을 수 있다
+- [ ] 간단한 ESLint 규칙 또는 Babel 플러그인을 작성할 수 있다
+
+---
+
+[← 5-2. 실행 컨텍스트·스코프·클로저](5단계-2-실행-컨텍스트-스코프-클로저) | [5-4. 모듈 시스템과 번들러 →](5단계-4-모듈-시스템과-번들러)

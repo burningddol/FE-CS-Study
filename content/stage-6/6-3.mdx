@@ -1,0 +1,705 @@
+
+> **학습 목표**
+> - MVC/MVP/MVVM의 차이와 현대 FE 프레임워크의 위치를 이해한다
+> - Flux/Redux의 단방향 흐름이 왜 설계 표준이 되었는지 학습한다
+> - Clean Architecture와 Hexagonal의 의존성 방향을 이해하고 FE에 적용할 수 있다
+> - FSD(Feature-Sliced Design), 마이크로 프론트엔드, 모노레포 등 FE 특화 아키텍처 트렌드를 파악한다
+
+* * *
+
+## 0. "아키텍처"가 뭔데 — 초심자용
+
+### 0-1. 디자인 패턴 vs 아키텍처 패턴
+
+| | 디자인 패턴 (6-1) | 아키텍처 패턴 (6-3) |
+|---|---|---|
+| 규모 | 함수/클래스 수준 | **프로젝트 전체 수준** |
+| 한 줄 | "이 파일 안에서 어떻게 쪼개나" | "프로젝트 전체 폴더/계층을 어떻게 나누나" |
+| 예시 | Observer, Strategy | MVC, Clean Architecture, FSD |
+
+건축으로 비유: 디자인 패턴이 "방 구조" 라면, 아키텍처 패턴은 "건물 전체 구조 (계단 배치, 엘리베이터 위치, 배관 설계)".
+
+### 0-2. 왜 필요한가
+
+파일 10개짜리 프로젝트는 아키텍처 없이도 된다. 그런데 파일 1000개, 개발자 10명이 되면:
+
+- **변경 한 번**의 영향이 어디까지 갈지 예측 불가
+- 새 팀원이 **어디서 뭘 찾아야 할지** 모름
+- 기능 A와 B가 **서로 얽혀서** 독립적으로 배포 못 함
+- 테스트를 **어디에 둬야 할지** 모름
+
+아키텍처 = **규칙을 미리 정해서 혼란을 줄이는 일**.
+
+### 0-3. 이 장에서 다룰 7가지 아키텍처
+
+| 이름 | 한 줄 |
+|---|---|
+| **MVC / MVP / MVVM** | UI를 Model, View로 분리하는 고전 방식 |
+| **Flux / Redux** | 상태 변경을 **단방향** 으로 흐르게 |
+| **Clean Architecture** | 의존성을 안쪽 (도메인) 으로 향하게 |
+| **Hexagonal** | 외부 (DB, UI) 와 핵심 (비즈니스 로직) 분리 |
+| **FSD (Feature-Sliced Design)** | 기능 단위로 폴더 구성 (FE 특화) |
+| **MFE (Micro Frontend)** | 큰 FE 앱을 **여러 독립 앱** 으로 쪼개기 |
+| **Monorepo** | 여러 프로젝트를 **한 저장소** 에서 관리 |
+
+### 0-4. 아키텍처 선택의 원칙
+
+> "좋은 아키텍처 = **결정을 미룰 수 있게** 해주는 것." — Robert C. Martin
+
+- DB를 MySQL로 할지 PostgreSQL로 할지? → 나중에 결정해도 되어야
+- UI 프레임워크가 React? Vue? → 나중에 바꿀 수 있어야
+- 서버 API가 REST? GraphQL? → 핵심 로직은 영향 없어야
+
+**핵심 비즈니스 로직은 기술 선택과 독립적이어야 한다.** 이게 Clean/Hexagonal의 공통 철학.
+
+### 0-5. 초보자가 빠지는 함정
+
+- **"아키텍처는 클수록 좋다"** → 작은 앱에 Clean Architecture 들이면 **오버엔지니어링**
+- **"Redux 는 무조건 써야 한다"** → 단순 앱은 useState로 충분. Redux는 **상태 복잡도가 임계점을 넘을 때**
+- **"FSD 를 따르는 게 모범이다"** → 팀의 규모·경험·도메인에 따라 맞춤
+
+**아키텍처는 "문제의 크기"에 맞아야 한다.** 과하면 허들, 부족하면 혼돈.
+
+### 0-6. 이 장을 읽은 뒤 할 수 있는 것
+
+- 현재 프로젝트의 아키텍처를 **이름 붙여서 설명**할 수 있음
+- "이 변경이 왜 이렇게 많은 파일을 건드려야 하나" 의 **근본 원인** 진단
+- 팀과 **폴더 구조 논의** 시 구체적 제안
+- 신규 프로젝트에서 **적절한 수준**의 아키텍처 선택
+
+### 0-7. 선행 장 연결
+
+- [6-2](6단계-2-설계-원칙.md)의 SOLID, 특히 **DIP (의존성 역전)** 이 이 장의 Clean Architecture 의 핵심
+- [5-7](5단계-7-프레임워크-내부-동작.md)의 React/Vue 가 MVC 계보에서 어떤 위치에 있는가
+- [4-6](4단계-6-FE가-자주-마주치는-이슈.md)의 서버 상태 관리 이슈가 Flux 탄생 배경
+
+---
+
+## 1. 아키텍처 패턴이 필요한 이유
+
+**규모**가 커질수록 코드 한 줄 바꾸기가 두려워진다. 아키텍처는 **"변경의 영향 범위"를 제한하고 "의존성 방향"을 통제**하는 기술이다.
+
+> 좋은 아키텍처란 **결정을 미룰 수 있게 해주는 것**이다. — Robert C. Martin
+
+---
+
+## 2. MVC / MVP / MVVM
+
+### 2-1. MVC (Model-View-Controller)
+
+```
+사용자 입력 → Controller → Model 업데이트 → View 렌더
+                                 ↑
+                          View가 직접 Model을 읽기도 함
+```
+
+- **Model**: 데이터·비즈니스 로직
+- **View**: 사용자에게 보이는 UI
+- **Controller**: 입력을 받아 Model을 수정
+
+**원조 MVC**(Smalltalk, Rails)는 Observer 기반으로 Model → View 자동 반영까지 포함했다. 지금 "MVC"라 부르는 것은 변종이 많다.
+
+### 2-2. MVP (Model-View-Presenter)
+
+```
+View ⇄ Presenter ⇄ Model
+```
+
+- **View는 수동적(passive)** — Presenter가 시키는 대로만 그림
+- **Presenter**가 이벤트 해석·Model 호출·View 업데이트 명령
+- 테스트 용이: Presenter는 UI 프레임워크 없이 단위 테스트 가능
+
+### 2-3. MVVM (Model-View-ViewModel)
+
+```
+View ⇄ (data binding) ⇄ ViewModel ⇄ Model
+```
+
+- **ViewModel**: View에 필요한 데이터 + 동작. 양방향 데이터 바인딩 전제.
+- **Angular, Vue**가 이 구조에 가깝다.
+- View는 "선언적으로 ViewModel 속성을 표시"하고, 입력 이벤트도 ViewModel에 바인딩.
+
+### 2-4. React는 무엇인가
+
+React 자체는 **MVC/MVVM 어느 것도 아니다**. "View 라이브러리"다.
+
+실무에서는 React를 **Flux/MVVM 하이브리드**로 쓰는 경우가 많다:
+- 컴포넌트 = View
+- 훅/스토어 = ViewModel + Model 경계
+- 단방향 데이터 흐름
+
+---
+
+## 3. Flux / Redux — 단방향 데이터 흐름
+
+### 3-1. 동기
+
+Facebook이 뉴스피드의 "좋아요 카운트가 맞지 않는" 문제에서 **양방향 바인딩의 예측 불가성**을 인식하고 고안한 패턴.
+
+### 3-2. Flux 구조
+
+```
+Action → Dispatcher → Store → View
+   ↑                            ↓
+   └─── 사용자 인터랙션 ─────────┘
+```
+
+**핵심 규칙**: 데이터는 **한 방향으로만** 흐른다. View가 Store를 직접 수정하지 않는다.
+
+### 3-3. Redux (가장 유명한 Flux 구현)
+
+```js
+// 1. Action = 무엇이 일어났는가
+const addTodo = (text) => ({ type: 'todos/add', payload: { text } });
+
+// 2. Reducer = 상태를 어떻게 바꿀 것인가 (순수 함수)
+function todosReducer(state = [], action) {
+  switch (action.type) {
+    case 'todos/add':
+      return [...state, { id: Date.now(), text: action.payload.text }];
+    default:
+      return state;
+  }
+}
+
+// 3. Store = 단일 진실 공급원
+const store = configureStore({ reducer: { todos: todosReducer } });
+
+// 4. View = 상태를 읽고 Action을 dispatch
+function TodoList() {
+  const todos = useSelector(s => s.todos);
+  const dispatch = useDispatch();
+  return (
+    <>
+      <button onClick={() => dispatch(addTodo('buy milk'))}>추가</button>
+      <ul>{todos.map(t => <li key={t.id}>{t.text}</li>)}</ul>
+    </>
+  );
+}
+```
+
+### 3-4. 왜 이 구조가 승리했나
+
+- **예측 가능성**: 상태 변화는 Action → Reducer 경로 하나만.
+- **Time-travel debugging**: Action 히스토리를 재생 가능.
+- **직렬화**: Action·State가 JSON이라 로깅·복구 쉬움.
+- **테스트 용이**: Reducer는 순수 함수.
+
+### 3-5. Redux의 단점과 대안
+
+- **보일러플레이트**: action/reducer/selector/dispatch 타이핑 피로
+- **서버 상태 관리에 부적합**: 캐시/refetch/invalidation 수동
+
+→ 현대 실무:
+- 클라이언트 상태: **Zustand, Jotai** (간결)
+- 서버 상태: **TanStack Query, SWR** (캐시·동기화 내장)
+- 복잡 워크플로우: **XState** (명시적 상태 기계)
+
+---
+
+## 4. Clean Architecture
+
+### 4-1. 핵심 아이디어
+
+**의존성은 안으로만 향한다.**
+
+```
+┌─────────────────────────────────────┐
+│ Frameworks & Drivers                │  ← React, Next.js, axios, Postgres
+│ ┌─────────────────────────────────┐ │
+│ │ Interface Adapters              │ │  ← Controllers, Presenters, Gateways
+│ │ ┌─────────────────────────────┐ │ │
+│ │ │ Use Cases (Application)     │ │ │  ← 유즈케이스 (createOrder, login)
+│ │ │ ┌─────────────────────────┐ │ │ │
+│ │ │ │ Entities (Domain)       │ │ │ │  ← 비즈니스 규칙 (Order, User)
+│ │ │ └─────────────────────────┘ │ │ │
+│ │ └─────────────────────────────┘ │ │
+│ └─────────────────────────────────┘ │
+└─────────────────────────────────────┘
+
+       의존성 방향: 바깥 → 안쪽
+```
+
+- 바깥 계층은 안쪽을 알지만, **안쪽은 바깥을 모른다**
+- "React를 바꿔도 도메인 로직은 그대로" 같은 상태를 목표로 함
+
+### 4-2. FE에서의 현실적 적용
+
+FE 전체에 풀 클린 아키텍처를 적용하는 건 **과하다**. 하지만 **핵심 도메인 로직**에는 적용 가치가 있다.
+
+```
+src/
+├── domain/              ← 비즈니스 규칙 (프레임워크 무관 TS)
+│   ├── entities/
+│   │   └── Order.ts
+│   └── usecases/
+│       └── createOrder.ts
+├── adapters/            ← API 호출, 저장소 구현
+│   └── http/
+│       └── orderApi.ts
+├── ui/                  ← React 컴포넌트
+│   └── OrderForm.tsx
+└── app/                 ← 프레임워크 엔트리, 라우터
+```
+
+**이득**:
+- `createOrder`는 React 없이 Node/Deno/CLI에서도 재사용 가능
+- 유닛 테스트가 빠르고 격리됨
+- 프레임워크 교체 비용 감소 (어차피 잘 안 일어나지만)
+
+**함정**:
+- 작은 앱에서는 **과잉 설계** → YAGNI 위반
+- 파일 수가 폭증 — 팀 공감대 필요
+
+---
+
+## 5. Hexagonal Architecture (Ports & Adapters)
+
+### 5-1. 구조
+
+```
+        ┌─────────────┐
+        │   Domain    │
+        │  (Core)     │
+        └──┬────┬─────┘
+           │    │
+    ┌──────┘    └──────┐
+    │ Ports (Interfaces)│
+    └──────┬────┬──────┘
+           │    │
+    ┌──────┘    └──────┐
+    │   Adapters       │
+    │ (HTTP, DB, UI)   │
+    └──────────────────┘
+```
+
+- **Domain**: 비즈니스 로직 (순수)
+- **Port**: Domain이 외부와 소통하는 **추상 인터페이스**
+- **Adapter**: Port를 구현한 **구체 연결 코드** (Postgres, Fetch API 등)
+
+### 5-2. FE 예시
+
+```ts
+// domain/OrderService.ts
+interface OrderRepository {  // ← Port
+  save(order: Order): Promise<void>;
+  findById(id: string): Promise<Order | null>;
+}
+
+class OrderService {
+  constructor(private repo: OrderRepository) {}
+
+  async placeOrder(items: Item[]) {
+    const order = Order.create(items);
+    await this.repo.save(order);
+    return order;
+  }
+}
+
+// adapters/HttpOrderRepository.ts (Adapter)
+class HttpOrderRepository implements OrderRepository {
+  async save(order: Order) {
+    await fetch('/api/orders', { method: 'POST', body: JSON.stringify(order) });
+  }
+  async findById(id: string) {
+    return fetch(`/api/orders/${id}`).then(r => r.json());
+  }
+}
+
+// adapters/InMemoryOrderRepository.ts (테스트용)
+class InMemoryOrderRepository implements OrderRepository {
+  private store = new Map();
+  async save(order) { this.store.set(order.id, order); }
+  async findById(id) { return this.store.get(id) ?? null; }
+}
+```
+
+테스트는 InMemory 버전으로, 프로덕션은 Http 버전으로 **Adapter만 교체**. Clean Architecture의 한 구현 방식이다.
+
+---
+
+## 6. Feature-Sliced Design (FSD)
+
+### 6-1. 배경
+
+FE 커뮤니티(주로 러시아·동유럽)에서 정착한 **레이어·슬라이스 조합** 아키텍처. React/Vue/Svelte 무관.
+
+### 6-2. 레이어
+
+```
+app      ← 앱 초기화, 라우터, 전역 Provider
+pages    ← 라우트 단위 페이지 조립
+widgets  ← 여러 feature를 조합한 큰 UI 블록 (헤더, 사이드바)
+features ← 사용자에게 가치를 주는 동작 단위 (로그인, 좋아요)
+entities ← 도메인 객체 (User, Order, Product)
+shared   ← 공용 UI 킷, 유틸, API 클라이언트
+```
+
+**핵심 규칙**: **상위 레이어만 하위 레이어를 import**한다. `entities`는 `features`를 import할 수 없다.
+
+```
+app → pages → widgets → features → entities → shared
+```
+
+### 6-3. 슬라이스
+
+각 레이어는 **도메인별 슬라이스**로 나뉜다.
+
+```
+features/
+├── auth/
+│   ├── ui/          ← 컴포넌트
+│   ├── model/       ← 상태, 훅
+│   ├── api/         ← API 호출
+│   └── index.ts     ← Public API (export 집합)
+├── like-post/
+└── comment/
+```
+
+### 6-4. 장점
+
+- **코드 위치가 예측 가능** — "이 기능 어디 있지?" 고민 감소
+- **기능 단위 응집** — 삭제/추가가 쉬움
+- **의존성 방향 강제** — 순환 import 구조적으로 차단
+
+### 6-5. 적용 주의
+
+- **학습 곡선**: 팀 전원의 공감대가 필요
+- **작은 앱에는 과함**: 10페이지 미만 앱엔 overkill
+- **엔터프라이즈·장기 운영 앱**에 진가 발휘
+
+---
+
+## 7. Container / Presentational
+
+### 7-1. 구조 (과거)
+
+- **Container**: 상태, API 호출, 비즈니스 로직
+- **Presentational**: UI만, props로 데이터 받음 (dumb)
+
+```jsx
+// Container
+function UserListContainer() {
+  const { data } = useUsers();
+  return <UserList users={data} />;
+}
+
+// Presentational
+function UserList({ users }) {
+  return <ul>{users.map(u => <li>{u.name}</li>)}</ul>;
+}
+```
+
+### 7-2. Hooks 시대의 변화
+
+커스텀 훅으로 로직을 뽑으면 **한 컴포넌트 안에서 관심사 분리**가 가능해져, 강제 분리 동기가 약해졌다.
+
+```jsx
+function UserList() {
+  const { data } = useUsers();     // 데이터
+  const [filter, setFilter] = useState(''); // 상태
+  const filtered = useFilter(data, filter); // 파생
+  return <>{filtered.map(...)}</>;           // UI
+}
+```
+
+단, **스토리북 / 디자인 시스템**에서는 여전히 Presentational-Only 컴포넌트가 필요하다(API 의존 없이 렌더링 가능해야 하므로).
+
+---
+
+## 8. 훅 추출 패턴
+
+### 8-1. 원칙
+
+컴포넌트는 **UI + 훅 조합**으로 구성. 비즈니스 로직은 **커스텀 훅**에.
+
+```jsx
+// 큰 컴포넌트
+function OrderForm() {
+  const form = useOrderForm();          // 입력/검증
+  const pricing = usePricingCalc(form); // 세금, 할인
+  const submit = useSubmitOrder();      // API
+  return (
+    <form onSubmit={() => submit.mutate(form.value)}>
+      {/* UI */}
+    </form>
+  );
+}
+```
+
+### 8-2. 좋은 훅의 기준
+
+- **이름이 동작을 드러냄** (`useDebouncedValue`, `useOrderValidation`)
+- **반환 타입이 작음** — 5개 넘으면 리팩토링 신호
+- **UI 특정 가정이 없음** — Headless 지향
+- **테스트 가능** — `@testing-library/react-hooks` 또는 컴포넌트 감싸서
+
+---
+
+## 9. 마이크로 프론트엔드 (MFE)
+
+### 9-1. 정의
+
+**하나의 웹 앱을 여러 팀이 독립 개발·배포**하는 아키텍처. 백엔드 마이크로서비스의 프론트엔드 버전.
+
+### 9-2. 구현 방식
+
+| 방식 | 특징 |
+|------|------|
+| **iframe** | 가장 강한 격리, UX 어색함 |
+| **Web Components** | 프레임워크 독립적 캡슐화 |
+| **Module Federation** (Webpack 5) | 런타임 ESM 공유, 번들 중복 최소화 |
+| **Single-SPA** | 라우팅 기반 MFE 오케스트레이터 |
+| **서버 사이드 조합** | SSR 단계에서 HTML 스트링 합침 (Edge-side Includes) |
+
+### 9-3. Module Federation 간단 예
+
+```js
+// host webpack.config.js
+new ModuleFederationPlugin({
+  name: 'host',
+  remotes: {
+    checkout: 'checkout@https://checkout.example.com/remoteEntry.js',
+  },
+});
+
+// host code
+const Checkout = React.lazy(() => import('checkout/Checkout'));
+```
+
+### 9-4. Trade-off
+
+**장점**:
+- 팀 독립 배포 (Amazon·Spotify 규모)
+- 기술 스택 다양화 가능
+- 장애 격리
+
+**단점**:
+- **번들 중복** (React 여러 버전 로드)
+- 공통 디자인 시스템 / 상태 공유 복잡
+- 성능 저하 위험
+- 운영 복잡도 ↑
+
+⚠️ **작은 조직에 MFE는 거의 항상 과하다**. 진짜 수십 팀이 독립 배포해야 하는 규모가 아니면 **모노레포 + 모듈 분리**로 충분하다.
+
+---
+
+## 10. 모노레포 (Monorepo)
+
+### 10-1. 정의
+
+여러 패키지/앱을 **하나의 Git 저장소**에서 관리.
+
+### 10-2. 도구
+
+- **pnpm workspaces** — 기본, 디스크 효율적 (symlink)
+- **Turborepo** — 병렬 빌드, 원격 캐시 (Vercel 제공)
+- **Nx** — 의존성 그래프, generators, 플러그인 풍부
+- **Lerna** — 원조, 지금은 Nx에 통합됨
+
+### 10-3. 구조 예
+
+```
+repo/
+├── apps/
+│   ├── web/          ← Next.js 앱
+│   └── admin/        ← Vite 앱
+├── packages/
+│   ├── ui/           ← 디자인 시스템
+│   ├── config/       ← 공용 ESLint/TS 설정
+│   └── api-client/   ← API SDK
+├── pnpm-workspace.yaml
+└── turbo.json
+```
+
+### 10-4. 모노레포의 이득
+
+- **공유 코드를 진짜로 공유** — 심볼릭 링크로 즉시 반영
+- **원자적 변경** — UI 컴포넌트 변경 + 앱 쓰는 부분 **한 PR로** 반영
+- **일관된 툴체인** — ESLint/TS 설정 통일
+- **빌드 캐시**로 CI 빠름
+
+### 10-5. 위험
+
+- 저장소 크기 커짐
+- Git 연산 느려짐 (파셜 클론, Scalar 필요)
+- 권한 경계 불분명 (CODEOWNERS로 보완)
+
+---
+
+## 11. BFF (Backend for Frontend)
+
+### 11-1. 개념
+
+FE 앱(웹/모바일/워치)마다 **전용 백엔드**를 두고, 각 클라이언트에 맞는 API 조합·포맷팅을 수행.
+
+```
+Web App  → BFF-Web  ┐
+                     ├→ 여러 마이크로서비스
+Mobile  → BFF-Mobile ┘
+```
+
+### 11-2. 언제 필요한가
+
+- 화면 하나에 **여러 API 호출 필요** → BFF에서 병렬 합쳐 하나의 응답으로
+- 클라이언트별 데이터 요구 차이 (모바일은 가벼운 페이로드)
+- **OAuth 토큰을 BFF에서 보관** (브라우저 XSS 위험 완화)
+
+### 11-3. Next.js API Routes / Remix Loaders
+
+```
+서버 렌더링 프레임워크가 사실상 BFF 역할을 겸한다.
+```
+
+FE 개발자가 BFF 로직도 작성 가능한 **Full-stack 프레임워크** 흐름.
+
+---
+
+## 12. 실무 가이드: 어느 수준까지 갈 것인가
+
+| 규모 | 권장 |
+|------|------|
+| 개인/토이 프로젝트 | 폴더 구조 단순, 원칙만 지키기 |
+| 10명 이하 팀, 단일 앱 | FSD 일부 채택 (features/entities/shared) |
+| 20~50명, 복수 앱 | 모노레포 + 디자인 시스템 패키지 |
+| 50+ 명, 독립 배포 필요 | MFE 검토 |
+| 거대 엔터프라이즈 | MFE + BFF + Clean/Hexagonal |
+
+---
+
+## 13. 실무 체크리스트
+
+- [ ] 상태 흐름이 **단방향**으로 설계되어 있는가
+- [ ] 도메인 로직이 React/Framework 코드와 **물리적으로 분리**되어 있는가 (또는 훅으로 격리)
+- [ ] API 호출이 컴포넌트에 직접 박혀있지 않고 **훅/서비스 경계**에 있는가
+- [ ] 레이어 간 의존성 방향이 일관된가 (상위가 하위를 import, 반대 금지)
+- [ ] 기능 추가가 "어디에 두지?" 고민 없이 자연스럽게 이루어지는가
+- [ ] 모노레포 도입 시 **빌드 그래프·캐시**를 활용하는가
+- [ ] MFE 도입 전에 **정말 필요한지** 비용·대안과 비교했는가
+
+---
+
+## 14. 연습 문제
+
+**Q1.** Redux의 단방향 데이터 흐름이 **양방향 바인딩 기반 프레임워크**보다 디버깅에 유리한 이유를 설명하라.
+
+<details>
+<summary>정답</summary>
+
+양방향 바인딩은 View ⇄ Model이 서로를 수정할 수 있어, 상태가 바뀐 **원인 추적이 어렵다**. "이 값이 왜 이렇게 됐지?"에 대한 답이 모호.
+
+Redux는 상태 변경이 **Action → Reducer** 경로 하나뿐이다. DevTools가 **모든 Action을 시간 순서로 기록**하고 각 시점의 state를 볼 수 있어, "언제·어떤 Action이 상태를 이렇게 바꿨나"를 정확히 재현할 수 있다(Time-travel debugging). Action이 순수한 데이터(JSON)라 저장·공유·재생도 가능.
+
+</details>
+
+**Q2.** Clean Architecture의 "의존성 방향" 규칙이 깨진 FE 코드의 예를 들고 수정 방향을 제시하라.
+
+<details>
+<summary>정답</summary>
+
+예: `domain/Order.ts`의 `Order` 엔티티가 `import axios from 'axios'`를 해서 직접 API를 호출.
+```ts
+// ❌ domain이 axios(adapter)에 의존 — 의존성 방향 역전됨
+class Order {
+  async save() { await axios.post('/orders', this); }
+}
+```
+Domain 계층이 바깥(Adapter)에 의존한다 = 규칙 위반.
+
+수정: Domain은 **인터페이스(Port)만 정의**하고 구현은 Adapter 계층에.
+```ts
+// domain/Order.ts
+interface OrderRepository { save(order: Order): Promise<void>; }
+class Order { /* 순수 비즈니스 규칙만 */ }
+
+// usecases/createOrder.ts
+async function createOrder(input, repo: OrderRepository) {
+  const order = Order.create(input);
+  await repo.save(order);
+}
+
+// adapters/http/HttpOrderRepo.ts
+class HttpOrderRepo implements OrderRepository {
+  async save(order) { await axios.post('/orders', order); }
+}
+```
+
+</details>
+
+**Q3.** Hexagonal Architecture의 Port-Adapter 구조가 테스트에 주는 이점을 설명하라.
+
+<details>
+<summary>정답</summary>
+
+Domain이 **Port(인터페이스)에만 의존**하므로, 테스트에서는 **In-Memory Adapter**를 주입해 외부 시스템(HTTP, DB) 없이 도메인 로직을 빠르게 검증할 수 있다.
+
+예: `OrderService`의 "재고 부족 시 주문 실패" 테스트를, 실제 HTTP 서버나 mock 라이브러리 없이 `InMemoryOrderRepo`로 검증. 테스트가 빠르고(수 ms), 네트워크·DB 환경에 의존하지 않아 **flaky하지 않다**. 또한 Adapter 층도 별도로 격리 테스트 가능.
+
+</details>
+
+**Q4.** FSD의 "상위 레이어만 하위를 import"라는 규칙을 지켜야 하는 이유를 들어라.
+
+<details>
+<summary>정답</summary>
+
+1. **순환 의존 원천 차단**: features끼리 서로 import하는 구조를 허용하면 곧 `feature-A → feature-B → feature-A` 같은 순환이 생긴다. 빌드·테스트·리팩토링이 모두 꼬임.
+2. **영향 범위 예측**: `shared`를 수정하면 위쪽 전부에 영향 가능하지만, `pages`를 수정하면 `entities`는 무사함을 **규칙이 보장**한다.
+3. **재사용성 계층화**: 하위일수록 일반적·안정적이고, 상위일수록 도메인 특수·변동 심함. 이 경사가 유지돼야 재사용과 변경이 공존.
+4. **자동 검증 가능**: `eslint-plugin-boundaries` 같은 도구로 규칙 위반을 CI에서 잡을 수 있다.
+
+</details>
+
+**Q5.** Container/Presentational 패턴이 Hook 시대에 약해진 이유는 무엇인가?
+
+<details>
+<summary>정답</summary>
+
+Container의 존재 이유는 **"상태·사이드 이펙트와 UI를 물리적 컴포넌트로 분리"** 였다. 클래스 컴포넌트 시절에는 이 분리가 사실상 유일한 방법이었다.
+
+Hook(특히 커스텀 훅)이 등장하면서 **한 컴포넌트 안에서도 관심사 분리가 가능**해졌다. `useOrderForm()`, `usePricing()`, `useSubmit()`로 로직을 훅에 담고 컴포넌트는 UI만 담당하면, Container-Presentational 나누지 않아도 같은 이점을 얻는다. 파일 수도 줄고 props drilling도 피할 수 있다.
+
+다만 **디자인 시스템·스토리북**처럼 "UI만 분리된 컴포넌트"가 필요한 경우는 여전히 Presentational-Only 형태가 유용하다.
+
+</details>
+
+**Q6.** 마이크로 프론트엔드 도입 전 반드시 확인할 질문 3가지를 들어라.
+
+<details>
+<summary>정답</summary>
+
+1. **"독립 배포"가 정말 필요한가?** 팀 수십 개가 서로 다른 릴리스 주기로 배포해야 하는 상황인가? 단순히 "코드를 분리하고 싶다"는 모노레포·패키지 분리로 해결된다.
+2. **번들 중복·성능 비용을 감당할 수 있나?** MFE는 보통 React 등 공통 라이브러리를 여러 번 로드하거나 Module Federation 같은 복잡 설정이 필요하다. LCP/TTI 저하를 받아들일 수 있는 앱인지.
+3. **디자인 시스템·인증·라우팅 오케스트레이션 체계가 준비되어 있나?** MFE가 성공하려면 팀 간 **공용 계약(디자인 토큰, auth token, 통신 프로토콜)**이 탄탄해야 한다. 이게 없으면 각 MFE가 서로 충돌하는 스타일·동작으로 쪼개진 UX를 만든다.
+
+</details>
+
+**Q7.** 모노레포가 "단일 저장소에 모든 걸 넣자"가 아니라 **어떤 실무적 문제**를 해결하는지 설명하라.
+
+<details>
+<summary>정답</summary>
+
+1. **공유 코드 동기화**: UI 라이브러리·API 타입을 여러 앱에 npm publish하면 **버전 지옥**이 시작된다. 모노레포는 같은 커밋의 코드를 심볼릭 링크로 참조하므로 **항상 최신·일관**. 디자인 시스템 한 줄 고치고 5개 앱에 반영되는 것을 **한 PR로** 검증 가능.
+2. **원자적 변경**: API 스키마 수정 + 백엔드 구현 + 프론트 타입 + UI 변경이 **한 PR**에서 함께 리뷰/머지. 부분 배포 중간의 깨진 상태를 방지.
+3. **빌드 캐시 공유**: Turbo/Nx가 의존성 그래프 기반으로 **변경된 패키지만 빌드**. CI 시간 80%+ 단축 가능.
+4. **일관된 툴체인**: ESLint/Prettier/tsconfig를 패키지로 공유. 신규 앱 생성 시 세팅 제로.
+
+단, 권한 분리·저장소 크기 같은 비용이 있으므로 팀 규모와 변경 빈도를 보고 도입한다.
+
+</details>
+
+---
+
+## 15. 정리
+
+- **MVC/MVP/MVVM**은 UI-데이터 분리의 고전 패턴이다. React는 기본적으로 이 중 어느 것도 아니며 **Flux 흐름 + 컴포넌트 합성**이 표준.
+- **Flux/Redux**의 단방향 흐름은 예측 가능성·디버깅·테스트 용이성 덕에 사실상의 산업 표준이다.
+- **Clean / Hexagonal**은 **의존성 방향**을 통제해 도메인을 프레임워크로부터 보호한다.
+- **FSD**는 FE에 특화된 레이어·슬라이스 기반 구조로, 중·대형 앱의 코드 위치·확장성을 해결한다.
+- **Container/Presentational**은 Hook 시대에 옅어졌지만, 디자인 시스템 문맥에서는 유효.
+- **MFE**는 초대형 조직의 독립 배포 문제를 해결하지만, 대부분의 팀엔 과하다.
+- **모노레포**는 공유 코드·원자적 변경·빌드 캐시의 이득을 주며, 현대 FE 팀의 실무 표준으로 빠르게 자리 잡았다.
+- **BFF**는 클라이언트별 API 집계·토큰 보호 문제를 해결. Next.js/Remix가 사실상 BFF 프레임워크로 동작.
+
+---
+
+[← 6-2. 설계 원칙](6단계-2-설계-원칙) | [6-4. 함수형 프로그래밍 →](6단계-4-함수형-프로그래밍)

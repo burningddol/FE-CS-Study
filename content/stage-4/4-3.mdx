@@ -1,0 +1,477 @@
+
+> **목표**: **1NF, 2NF, 3NF, BCNF** 정규화 과정과 **역정규화의 이유** 를 이해하고, 도메인 설계 시 trade-off를 논할 수 있어야 한다.
+
+---
+
+## 0. "정규화"가 도대체 뭔데 — 초심자용
+
+### 0-1. 정규화 = "중복 없게 표를 쪼개기"
+
+**한 줄 정의**: 테이블을 **여러 개로 잘게 쪼개서**, 같은 정보가 두 번 이상 저장되지 않게 만드는 작업.
+
+### 0-2. 왜 쪼개야 하나 — 구체 예시
+
+학원 수강생 정보를 한 엑셀에 몰아넣었다고 하자.
+
+| 학생ID | 이름 | 전화번호 | 수강과목 | 강사명 | 강사연락처 |
+|---|---|---|---|---|---|
+| 1 | 김철수 | 010-xxx | 수학 | 박선생 | 010-aaa |
+| 2 | 이영희 | 010-yyy | 수학 | 박선생 | 010-aaa |
+| 3 | 김철수 | 010-xxx | 영어 | 최선생 | 010-bbb |
+
+문제 보이나?
+
+- **박선생 전화번호가 바뀌면?** → 수학 수강생 수백 명 전부 수정해야 함. **한 명만 빠뜨려도 데이터 불일치.**
+- **수강생이 0명인 과목은?** → 강사 정보를 저장할 자리가 없음.
+- **김철수가 수강 취소하면?** → 김철수 연락처 정보까지 같이 날아감.
+
+이런 문제들을 **갱신 이상(update anomaly)** 이라 부른다. 정규화는 이를 없앤다.
+
+### 0-3. 정규화 후 모양
+
+```
+[학생 테이블]          [과목 테이블]        [강사 테이블]
+학생ID | 이름 | 전화  | 과목ID | 이름 | 강사ID | 강사ID | 이름 | 연락처
+
+              [수강 테이블]
+              학생ID | 과목ID
+```
+
+각 정보는 **한 곳에만** 저장. 박선생 연락처 바꾸려면 강사 테이블 한 줄만 고치면 됨.
+
+### 0-4. 용어 미리보기
+
+| 용어 | 한 줄 |
+|---|---|
+| 함수 종속 | "X를 알면 Y를 결정할 수 있다"는 관계 (학생ID → 이름) |
+| 1NF | 한 칸에 값 하나. 배열 같은 거 넣으면 안 됨 |
+| 2NF | 복합 키의 일부로만 결정되는 칼럼 제거 |
+| 3NF | 기본 키가 아닌 칼럼으로 결정되는 칼럼 제거 |
+| BCNF | 3NF의 엄격한 버전 |
+| 역정규화 | 성능을 위해 일부러 중복을 허용하는 것 (역방향) |
+
+### 0-5. FE 개발자에게 정규화가 왜 중요한가
+
+- **API 응답 구조**를 보면 정규화 수준이 드러남. 필요 이상으로 JOIN된 응답은 네트워크 낭비.
+- **Redux/Zustand 상태 설계**에서도 같은 원칙 적용. `normalizr` 같은 라이브러리가 존재하는 이유.
+- BE 엔지니어와 스키마 논의 시, "이 칼럼을 여기 두는 게 맞나?" 를 판단할 수 있음.
+
+### 0-6. 핵심 교훈 (미리 한 줄 요약)
+
+**"정규화는 일관성을 얻고 속도를 잃는다. 역정규화는 속도를 얻고 일관성을 잃는다."** 어느 쪽이든 의식적인 선택이어야 한다.
+
+---
+
+## 1. 왜 정규화인가
+
+정규화 없이 한 테이블에 몰아넣으면 **갱신 이상(anomaly)** 이 발생한다.
+
+### 예시 — 비정규화 테이블
+
+| order_id | user_id | user_name | user_email | product_id | product_name | price | qty |
+|----------|---------|-----------|------------|------------|--------------|-------|-----|
+| 1 | 100 | Alice | a@x.com | P1 | Book | 10 | 2 |
+| 2 | 100 | Alice | a@x.com | P2 | Pen | 2 | 5 |
+| 3 | 101 | Bob | b@x.com | P1 | Book | 10 | 1 |
+
+### 발생 문제
+
+- **Insert 이상**: 주문 없는 사용자 넣으려면 product를 NULL로 둬야 함
+- **Update 이상**: Alice 이메일 바꾸려면 **모든 행** 을 갱신
+- **Delete 이상**: Bob의 주문 3을 삭제하면 Bob 정보 자체가 사라짐
+- **중복**: Book 이름이 반복 저장
+
+---
+
+## 2. 함수 종속 (Functional Dependency)
+
+`X → Y`: X를 알면 Y가 정해진다.
+
+- `user_id → user_name, user_email`
+- `product_id → product_name, price`
+- `(order_id, product_id) → qty`
+
+### 완전 함수 종속
+
+Y가 X의 **부분집합이 아닌 전체**에만 종속.
+
+### 부분 함수 종속
+
+복합키의 **일부**에만 종속. 2NF 위반 원인.
+
+### 이행 함수 종속
+
+`X → Y → Z` 인데 X → Y, Y → Z 만 직접. 3NF 위반 원인.
+
+---
+
+## 3. 제1 정규형 (1NF)
+
+**모든 컬럼이 원자값(atomic)** 이어야 함.
+
+### 위반
+
+| user_id | phones |
+|---------|--------|
+| 1 | 010-1111, 010-2222 |
+
+### 1NF 변환
+
+```
+user_phones
+user_id | phone
+1 | 010-1111
+1 | 010-2222
+```
+
+### 반례로 자주 나오는 오해
+
+- JSON 배열이 컬럼에 있으면 1NF 위반? → **이론적으로는 그렇다**. 실무에선 검색·갱신 빈도가 낮으면 JSONB로 허용하기도.
+- **반복 그룹** (`phone1, phone2, phone3` 같은 동형 컬럼 여러 개)도 1NF 위반.
+
+---
+
+## 4. 제2 정규형 (2NF)
+
+**1NF + 모든 비주요 속성이 주요 속성(PK) 에 완전 함수 종속**.
+
+복합키에서 문제가 주로 발생.
+
+### 위반 예
+
+```
+order_items (PK: order_id, product_id)
+-------------------------------------
+order_id | product_id | qty | product_name | price
+```
+
+- `qty` 는 (order_id, product_id) 전체에 종속 ✅
+- `product_name, price` 는 **product_id만** 으로 결정 → 부분 종속 ❌
+
+### 2NF 변환
+
+```
+order_items
+order_id | product_id | qty
+
+products
+product_id | product_name | price
+```
+
+---
+
+## 5. 제3 정규형 (3NF)
+
+**2NF + 이행 종속 제거**.
+
+### 위반 예
+
+```
+employees
+emp_id (PK) | name | dept_id | dept_name | dept_loc
+```
+
+- `emp_id → dept_id → dept_name` → 이행 종속
+- dept_name, dept_loc는 dept_id에만 종속
+
+### 3NF 변환
+
+```
+employees
+emp_id | name | dept_id
+
+departments
+dept_id | dept_name | dept_loc
+```
+
+---
+
+## 6. 보이스-코드 정규형 (BCNF)
+
+**3NF + 모든 결정자가 후보키**.
+
+### 3NF는 만족하지만 BCNF 위반 예
+
+```
+schedules
+student | course | instructor
+PK: (student, course)
+FD:
+  (student, course) → instructor
+  instructor → course    -- 강사가 가르치는 과목은 하나
+```
+
+- `instructor` 는 후보키가 아닌데 `course` 를 결정 → BCNF 위반
+
+### BCNF 변환
+
+```
+assignments
+student | instructor
+
+instructor_courses
+instructor | course
+```
+
+---
+
+## 7. 제4 정규형 (4NF) — 다치 종속
+
+한 PK가 **서로 독립적인 여러 집합**을 결정하면 분리.
+
+```
+employee_skills_langs
+emp | skill | language
+1 | Java   | English
+1 | Java   | Korean
+1 | Python | English
+1 | Python | Korean
+```
+
+skill과 language가 독립이면 분리:
+
+```
+emp_skills    emp_langs
+1 | Java      1 | English
+1 | Python    1 | Korean
+```
+
+실무에서는 3NF ~ BCNF까지만 엄격히 적용하고 4NF는 필요 시 고려.
+
+---
+
+## 8. 역정규화 (Denormalization)
+
+**읽기 성능**을 위해 일부러 중복을 허용.
+
+### 언제 하는가
+
+- JOIN 비용이 병목이고 수직 확장 한계
+- 데이터 갱신보다 **조회가 압도적**으로 많음 (OLAP, 피드)
+- 실시간 성능이 중요한 대시보드·검색 인덱스
+
+### 패턴
+
+1. **계산된 컬럼 저장**: `orders.total_amount` 를 items 테이블 집계로 계산하지 않고 미리 저장
+2. **중복 컬럼**: `orders.user_email` 을 users에서 JOIN하지 않고 함께 저장
+3. **요약 테이블**: 일별/시간별 집계를 별도 테이블로
+4. **Materialized View**: DB가 관리하는 캐시된 뷰
+
+### 비용
+
+- 갱신 시 여러 곳 수정 필요
+- **일관성 유지** (트리거, CDC)
+- 무결성 위험
+
+---
+
+## 9. 실전 — 언제 어디까지?
+
+```
+신규 서비스 시작 → 3NF로 설계
+읽기 병목 발견    → 해당 쿼리만 선택적 역정규화 (Materialized View 우선)
+대규모 분석      → 역정규화된 스타 스키마 (Fact + Dimension)
+```
+
+### Materialized View
+
+```sql
+-- PostgreSQL
+CREATE MATERIALIZED VIEW monthly_revenue AS
+SELECT date_trunc('month', created_at) AS month, SUM(amount) AS total
+FROM orders
+GROUP BY 1;
+
+REFRESH MATERIALIZED VIEW CONCURRENTLY monthly_revenue;
+```
+
+---
+
+## 10. 스타 스키마 (OLAP)
+
+```
+            ┌──────────────┐
+            │  dim_date    │
+            └──────┬───────┘
+                   │
+  ┌──────────┐     │     ┌──────────────┐
+  │dim_product├────┼────►│  fact_sales   │
+  └──────────┘     │     │                │
+                   │     │  date_id       │
+  ┌──────────┐     │     │  product_id    │
+  │dim_store ├─────┼────►│  store_id      │
+  └──────────┘     │     │  qty, revenue  │
+                   │     └────────────────┘
+  ┌──────────┐     │
+  │dim_user  ├─────┘
+  └──────────┘
+```
+
+- **Fact**: 사건·측정값 (매출, 방문)
+- **Dimension**: 기준 (시간, 상품, 지역)
+- 역정규화된 구조로 집계 쿼리 최적화
+
+### Snowflake 스키마
+
+Dimension을 더 세분화 (정규화 방향). 중복 ↓ 조인 ↑.
+
+---
+
+## 11. ORM과 정규화
+
+JS 진영: Prisma, Drizzle, TypeORM, Sequelize.
+
+```prisma
+// Prisma schema
+model User {
+  id       Int      @id @default(autoincrement())
+  email    String   @unique
+  orders   Order[]
+}
+
+model Order {
+  id        Int       @id @default(autoincrement())
+  userId    Int
+  user      User      @relation(fields: [userId], references: [id])
+  items     OrderItem[]
+}
+
+model OrderItem {
+  id         Int     @id @default(autoincrement())
+  orderId    Int
+  productId  Int
+  qty        Int
+  order      Order   @relation(fields: [orderId], references: [id])
+  product    Product @relation(fields: [productId], references: [id])
+}
+```
+
+ORM이 JOIN/Eager 로딩을 도와주지만, **N+1 쿼리 함정** 에 주의.
+
+```js
+// N+1
+const orders = await prisma.order.findMany();
+for (const o of orders) {
+  const items = await prisma.orderItem.findMany({ where: { orderId: o.id } });
+}
+
+// Eager loading
+const orders = await prisma.order.findMany({ include: { items: true } });
+```
+
+---
+
+## 12. ⚠️ 자주 하는 실수
+
+| 실수 | 문제 |
+|------|------|
+| 처음부터 완벽 정규화 집착 | 과한 조인, 성능 저하 |
+| 처음부터 역정규화 | 갱신 이상, 무결성 붕괴 |
+| 모든 관계를 JSONB로 | 조회는 편하지만 트랜잭션·무결성·인덱스 약해짐 |
+| 소프트 삭제 컬럼 남발 | 쿼리마다 `WHERE deleted_at IS NULL` 빠뜨림 |
+| 역정규화된 값이 원본과 불일치 | 트리거·트랜잭션으로 동기화 보장 필수 |
+
+---
+
+## 13. 연습 문제
+
+**Q1.** 1NF, 2NF, 3NF를 한 문장으로 설명하라.
+
+<details>
+<summary>정답</summary>
+
+- **1NF**: 모든 컬럼이 원자값(반복 그룹·배열 금지).
+- **2NF**: 1NF + 비주요 속성이 복합키의 **일부가 아닌 전체**에 종속.
+- **3NF**: 2NF + 비주요 속성 간 **이행 종속 없음**.
+
+</details>
+
+**Q2.** 다음 테이블의 가장 높은 정규형은?
+
+```
+(emp_id, project_id) → hours
+emp_id → emp_name
+project_id → project_budget
+```
+
+<details>
+<summary>정답</summary>
+
+**1NF**. emp_name과 project_budget이 복합키의 일부에만 종속 → 2NF 위반(부분 종속). 분리해 2NF 이상으로 올려야 한다.
+
+</details>
+
+**Q3.** BCNF가 3NF보다 엄격한 이유는?
+
+<details>
+<summary>정답</summary>
+
+3NF는 "비주요 속성의 이행 종속" 만 제거. 하지만 **주요 속성 간** 의 종속 (후보키가 아닌 속성이 다른 주요 속성을 결정) 이 남을 수 있다. BCNF는 **모든 결정자가 후보키** 여야 한다고 요구해, 3NF로는 못 잡는 변칙까지 제거.
+
+</details>
+
+**Q4.** 언제 역정규화를 고려해야 하는가?
+
+<details>
+<summary>정답</summary>
+
+1. 읽기 쿼리가 JOIN으로 병목이고 인덱스·캐시로 해결 안 됨
+2. 조회:갱신 비율이 매우 높음 (100:1 이상)
+3. 집계·대시보드처럼 반복되는 고비용 쿼리
+4. 실시간성(사용자 피드)이 가격보다 우선
+
+먼저 Materialized View / 인덱스 튜닝을 시도하고, 그래도 부족할 때 역정규화.
+
+</details>
+
+**Q5.** Materialized View와 일반 View의 차이는?
+
+<details>
+<summary>정답</summary>
+
+- **View**: 매 조회 시 원본 쿼리 재실행 → 항상 최신, 저장 공간 없음
+- **Materialized View**: 결과를 **물리적으로 저장**. 빠른 조회, 주기적 `REFRESH` 필요. 일관성은 refresh 주기만큼 지연.
+
+</details>
+
+**Q6.** 소프트 삭제(`deleted_at` 컬럼) 의 장단점은?
+
+<details>
+<summary>정답</summary>
+
+**장점**: 복구 가능, 감사 로그, 참조 무결성 유지.
+**단점**: 모든 쿼리에 `WHERE deleted_at IS NULL` 필요 → 빠뜨리면 보안 이슈. 인덱스 크기 증가. 실제 삭제 아님. UNIQUE 제약이 `deleted_at IS NULL` 조건으로 복잡해짐.
+
+실무: ORM 미들웨어로 자동 필터, 별도 archive 테이블 이동 고려.
+
+</details>
+
+**Q7.** JSONB 컬럼을 쓰면 정규화 규칙을 무시해도 되는가?
+
+<details>
+<summary>정답</summary>
+
+**아니다**. JSONB는 1NF 관점에서 보면 이미 위반이지만, **언제 쓰는지가 중요**하다.
+- 구조가 자주 바뀌고 집계·관계 질의가 적은 경우에만 유리 (설정, 메타데이터)
+- 검색·JOIN 많으면 정규화된 컬럼이 유리
+- 외래키 제약, 타입 안정성, 인덱스 활용성이 떨어짐
+
+"관계가 강한 데이터는 관계형, 약한 데이터는 JSONB" 라는 규칙 추천.
+
+</details>
+
+---
+
+## 14. 체크리스트
+
+- [ ] 갱신 이상 3가지(Insert/Update/Delete)를 설명할 수 있다
+- [ ] 1NF, 2NF, 3NF, BCNF를 정의할 수 있다
+- [ ] 부분 종속과 이행 종속을 예로 구분한다
+- [ ] 역정규화를 언제 해야 하는지 기준이 있다
+- [ ] Materialized View를 활용할 수 있다
+- [ ] 스타 스키마와 스노우플레이크 스키마를 구분한다
+- [ ] ORM N+1 쿼리 문제를 인지한다
+
+---
+
+[← 4-2. SQL 기본기](4단계-2-SQL-기본기) | [4-4. 인덱스 →](4단계-4-인덱스)

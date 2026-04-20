@@ -1,0 +1,503 @@
+
+> **목표**: **B-Tree 인덱스의 원리, 복합 인덱스, Covering Index, Hash/GIN/GiST 인덱스** 를 이해하고 성능 문제를 인덱스로 해결할 수 있어야 한다.
+
+---
+
+## 0. "인덱스"가 뭔데 — 초심자용
+
+### 0-1. 책의 색인이 바로 그것
+
+책 뒷페이지에 "가나다 순으로 정리된 단어 목록 + 해당 쪽수"가 있다. 이게 바로 **인덱스(index)**. 책 전체를 읽지 않고도 원하는 단어를 빠르게 찾을 수 있다.
+
+DB 인덱스도 똑같다. 테이블에 인덱스를 만들면, DB는 **별도의 정렬된 데이터 구조**를 만들어 저장한다. 검색 시 이 구조를 먼저 훑어 원하는 행의 위치를 찾고, 실제 행으로 점프한다.
+
+### 0-2. 인덱스가 없으면 어떻게 되나
+
+```sql
+SELECT * FROM users WHERE email = 'alice@example.com';
+```
+
+유저가 **1000만 명** 있다고 가정.
+
+- **인덱스 없음**: 1번부터 1000만 번까지 전부 훑으면서 email 비교 → **Sequential Scan**, 수 초 걸림
+- **인덱스 있음**: 정렬된 색인에서 이분 탐색 → **log₂(10,000,000) ≈ 24번** 만에 찾음, 1ms 이하
+
+**수천 배~수만 배 차이** 가 나는 이유.
+
+### 0-3. "그럼 모든 칼럼에 인덱스 만들면 되겠네?" — 함정
+
+인덱스의 대가(cost):
+
+- **저장 공간**: 인덱스도 디스크 차지 (때로 원본의 20~30%)
+- **쓰기 느려짐**: `INSERT`/`UPDATE`/`DELETE` 할 때마다 인덱스도 갱신해야 함
+- **메모리**: 자주 쓰는 인덱스는 메모리에 올라가서 RAM 경쟁
+
+**"읽기 빠르게 하려다 쓰기가 느려진다"** 는 트레이드오프. 이 장의 핵심.
+
+### 0-4. 자료구조 이어보기
+
+[1-6](1단계-6-연결-리스트-트리-그래프.md)에서 배운 트리가 실제로 쓰이는 곳 중 하나가 바로 **DB 인덱스**다. 주로 **B-Tree (정확히는 B+Tree)** 를 쓴다. 이진 탐색 트리의 "디스크 저장 친화" 버전.
+
+| 트리 종류 | 쓰이는 곳 |
+|---|---|
+| 이진 탐색 트리 | 교재용, 실제 드물게 |
+| B-Tree / B+Tree | DB 인덱스 (90% 이상) |
+| Hash Table | 정확히 일치 검색만 가능한 특수 인덱스 |
+| GIN / GiST | 전문 검색, JSON, 지리 데이터 |
+
+### 0-5. FE 개발자가 인덱스를 알면 좋은 점
+
+- **API가 느린 진짜 원인** 파악: "프론트 문제가 아니라 WHERE 절에 인덱스가 없어서"
+- **무한 스크롤 / 페이지네이션** 설계 시 인덱스 친화적인 키 선택
+- **검색 기능** 구현 시 LIKE vs 전문 검색 vs 외부 Elasticsearch 판단
+- BE와 대화할 때 "이 필드로 조회가 많을 텐데 인덱스 있나요?" 라고 물을 수 있음
+
+### 0-6. 이 장의 도달점
+
+실제 쿼리 플랜을 보고 "이 쿼리에 어떤 인덱스가 필요한가" 를 판단할 수 있는 수준. `EXPLAIN`을 읽을 줄 알게 된다.
+
+---
+
+## 1. 왜 인덱스인가
+
+```sql
+SELECT * FROM users WHERE email = 'a@x.com';
+```
+
+- 인덱스 없음 → **Sequential Scan**: 전체 테이블 O(N)
+- 인덱스 있음 → **Index Scan**: B-Tree O(log N)
+
+100만 행 테이블에서:
+- Seq Scan: 수십 ms~수초
+- Index Scan: 1ms 이하
+
+---
+
+## 2. B-Tree 구조 (정확히는 B+Tree)
+
+```
+                [ 50 | 100 ]
+               /     |      \
+          [20 30]  [60 80]  [120 150]
+          /  |  \   |  |  \   |  |  \
+        [leaves with actual data/pointers]
+        ↔   ↔   ↔   ↔        ↔   ↔
+```
+
+### 특징
+
+- **항상 균형** — 리프까지 깊이가 일정
+- **각 노드가 여러 키** — 분기수(fan-out)가 수백 → 깊이 3~4로 수억 레코드 커버
+- 리프는 **양방향 연결 리스트** → 범위 스캔 빠름
+- 데이터는 **리프에만** (B+Tree) — 내부 노드는 길잡이
+
+### 지원 연산
+
+- 등호 조회 `=`
+- 범위 조회 `>`, `<`, `BETWEEN`
+- 접두사 매칭 `LIKE 'abc%'` (% 가 뒤)
+- `ORDER BY` 와 `GROUP BY`
+
+---
+
+## 3. 복합 인덱스
+
+`CREATE INDEX idx ON users (country, city, age);`
+
+### 사용 가능한 쿼리 패턴 (leftmost prefix)
+
+```sql
+-- ✅ 활용
+WHERE country = 'KR'
+WHERE country = 'KR' AND city = 'Seoul'
+WHERE country = 'KR' AND city = 'Seoul' AND age > 20
+WHERE country = 'KR' AND age > 20              -- country 필터 후 age에 skip scan (DB마다 다름)
+
+-- ❌ 비활용
+WHERE city = 'Seoul'                           -- country 빠짐
+WHERE age > 20
+```
+
+### 컬럼 순서 규칙
+
+1. **WHERE 에서 = 비교되는** 컬럼 먼저
+2. 그다음 **정렬 기준**
+3. 마지막에 **범위 비교**
+
+```sql
+-- 좋음
+INDEX (user_id, created_at)
+WHERE user_id = ? ORDER BY created_at DESC
+
+-- 나쁨
+INDEX (created_at, user_id)
+-- 같은 쿼리에 범위 스캔 후 필터 → 비효율
+```
+
+---
+
+## 4. Covering Index
+
+**필요한 모든 컬럼이 인덱스에 포함**되면 테이블을 읽지 않아도 됨 → **Index Only Scan**.
+
+```sql
+-- 쿼리
+SELECT email FROM users WHERE status = 'active';
+
+-- 일반 인덱스
+CREATE INDEX idx ON users (status);
+-- → 인덱스로 행 찾고 → 테이블에서 email 읽음 (2번 I/O)
+
+-- Covering Index
+CREATE INDEX idx ON users (status) INCLUDE (email);
+-- → 인덱스만 읽고 끝 (1번 I/O)
+```
+
+### PostgreSQL `INCLUDE`, MySQL은 단순 복합 인덱스로 처리
+
+큰 속도 향상 가능, 단 인덱스 크기·쓰기 비용 ↑.
+
+---
+
+## 5. 인덱스 종류
+
+### B-Tree (기본)
+
+- 대부분의 쿼리. 등호·범위·정렬 모두 지원.
+
+### Hash
+
+```sql
+CREATE INDEX idx ON users USING HASH (email);
+```
+
+- 등호만 가능, 범위 불가
+- PostgreSQL은 B-Tree가 거의 항상 우위 — 잘 안 씀
+- Redis 같은 KV는 내부적으로 hash
+
+### GIN (Generalized Inverted Index)
+
+- **배열, JSONB, 전문 검색** 에 유용
+- "이 문서에 단어 X가 있는가?" → 역색인
+
+```sql
+CREATE INDEX idx ON posts USING GIN (tags);
+SELECT * FROM posts WHERE tags @> ARRAY['postgres'];
+
+CREATE INDEX idx ON posts USING GIN (data jsonb_path_ops);
+SELECT * FROM posts WHERE data @> '{"lang": "ko"}';
+
+CREATE INDEX idx ON posts USING GIN (to_tsvector('english', body));
+SELECT * FROM posts WHERE to_tsvector('english', body) @@ 'javascript & react';
+```
+
+### GiST (Generalized Search Tree)
+
+- **지리 정보, 범위 타입** 에 적합
+- PostGIS의 공간 인덱스
+
+```sql
+CREATE INDEX idx ON places USING GIST (location);
+SELECT * FROM places WHERE location <-> point '(0,0)' < 10;
+```
+
+### BRIN (Block Range Index)
+
+- 매우 큰 테이블, **물리적 순서와 값 순서가 맞는** 경우 (시계열 로그)
+- 인덱스 크기가 매우 작음
+
+```sql
+CREATE INDEX idx ON logs USING BRIN (created_at);
+```
+
+### 부분 인덱스 (Partial Index)
+
+```sql
+CREATE INDEX idx ON orders (user_id) WHERE status = 'pending';
+```
+
+- 특정 조건 행만 인덱싱 → 크기·유지 비용 ↓
+
+### 표현식 인덱스
+
+```sql
+CREATE INDEX idx ON users (lower(email));
+SELECT * FROM users WHERE lower(email) = 'a@x.com';
+```
+
+### 유니크 인덱스
+
+```sql
+CREATE UNIQUE INDEX idx ON users (email);
+```
+
+- UNIQUE 제약과 동일한 효과
+- 조합 유니크, 부분 유니크 (`WHERE deleted_at IS NULL`) 도 가능
+
+---
+
+## 6. 인덱스가 안 타는 경우
+
+### 함수 씌우기
+
+```sql
+-- ❌
+WHERE date_trunc('month', created_at) = '2026-04-01'
+
+-- ✅
+WHERE created_at >= '2026-04-01' AND created_at < '2026-05-01'
+-- 또는 표현식 인덱스 CREATE INDEX ON t (date_trunc(...))
+```
+
+### 묵시적 타입 변환
+
+```sql
+-- users.id가 BIGINT인데
+WHERE id = '123'   -- 문자열로 비교 → 인덱스 미사용 가능성
+```
+
+### LIKE '%abc'
+
+```sql
+-- ❌ 선두 와일드카드
+WHERE name LIKE '%smith'
+
+-- ✅
+WHERE name LIKE 'smith%'
+
+-- 양쪽 와일드카드는 GIN + pg_trgm
+CREATE EXTENSION pg_trgm;
+CREATE INDEX ON users USING GIN (name gin_trgm_ops);
+```
+
+### OR 조건
+
+```sql
+WHERE a = 1 OR b = 2
+-- 인덱스 두 개 있어도 못 쓰거나, Bitmap OR로 느려짐
+-- → UNION으로 쪼개거나 복합 조건 재설계
+```
+
+### 네거티브 조건
+
+```sql
+WHERE status <> 'done'   -- 대부분 Seq Scan
+```
+
+### 낮은 선택도 (low cardinality)
+
+- 전체 10% 이상의 행이 조건에 매칭되면 Seq Scan이 더 빠름
+- 인덱스가 있어도 옵티마이저가 Seq Scan 선택
+
+---
+
+## 7. 인덱스 비용
+
+### 쓰기 비용
+
+- INSERT/UPDATE/DELETE 시 **모든 인덱스가 갱신**
+- 인덱스 5개인 테이블 = 쓰기 5번
+
+### 공간 비용
+
+- 인덱스가 테이블 크기의 30~100% 차지 가능
+- 디스크, 메모리 (buffer pool), 백업 영향
+
+### 언제 인덱스를 추가할까
+
+- 쿼리 빈도가 높고 실행계획에서 Seq Scan 중
+- 테이블 행 수가 수천 이상
+- 쿼리 선택도가 낮음 (5% 이하 행 매칭)
+
+### 불필요한 인덱스 찾기
+
+```sql
+-- PostgreSQL pg_stat_user_indexes
+SELECT indexrelname, idx_scan
+FROM pg_stat_user_indexes
+WHERE idx_scan = 0;
+-- 사용된 적 없는 인덱스 후보
+```
+
+---
+
+## 8. 실행 계획 읽기 — 인덱스 관점
+
+```sql
+EXPLAIN ANALYZE
+SELECT * FROM users WHERE status = 'active' ORDER BY created_at DESC LIMIT 10;
+```
+
+```
+Limit
+  ->  Index Scan Backward using idx_users_created_at on users
+        Filter: (status = 'active')
+        Rows Removed by Filter: 9000
+```
+
+- `Index Scan Backward`: 인덱스 역순 스캔 (`ORDER BY DESC`)
+- `Filter`: 인덱스 타지 않은 조건
+- `Rows Removed by Filter`: 많으면 복합 인덱스 필요
+
+### 개선
+
+```sql
+CREATE INDEX idx ON users (status, created_at DESC);
+-- 또는 PostgreSQL 13+의 INCLUDE
+```
+
+---
+
+## 9. MySQL 특이사항
+
+### Clustered Index
+
+- InnoDB: **PK가 곧 데이터의 물리적 순서** (Clustered)
+- Secondary Index는 leaf에 PK를 저장 → 조회 시 PK 재조회 ("Bookmark Lookup")
+- PK 선정이 매우 중요 (짧고, 단조 증가)
+
+### UUIDv4 PK는 나쁨
+
+- 랜덤 삽입 → 페이지 분할 폭증, 인덱스 단편화
+- 대안: **UUIDv7**, ULID (시간 기반 순서)
+
+---
+
+## 10. 인덱스 설계 체크리스트
+
+1. WHERE / JOIN / ORDER BY / GROUP BY 컬럼 확인
+2. 선택도(cardinality) 높은 컬럼 우선 인덱스
+3. 복합 인덱스는 `=` 컬럼 → 정렬 → 범위 순
+4. 자주 SELECT하는 컬럼을 INCLUDE로 Covering
+5. WHERE에 조건이 상수인 경우 Partial Index
+6. 대용량 시계열은 BRIN
+7. JSON·배열 검색은 GIN
+8. 지리·범위 타입은 GiST
+
+---
+
+## 11. ⚠️ 자주 하는 실수
+
+| 실수 | 영향 |
+|------|------|
+| 모든 컬럼에 인덱스 | 쓰기 성능 폭락, 공간 낭비 |
+| 복합 인덱스 순서 무관심 | leftmost prefix 활용 못 함 |
+| 함수 적용된 조건 | 인덱스 미사용 |
+| `ORDER BY RAND()` | 전체 정렬 → 매우 느림, 다른 방법 (샘플링) |
+| UUID v4 를 PK로 | 인덱스 단편화, 삽입 느림 |
+| 외래키에 인덱스 없음 | 부모 DELETE 시 풀스캔 |
+
+---
+
+## 12. 연습 문제
+
+**Q1.** B-Tree 인덱스는 어떤 쿼리에 적합한가?
+
+<details>
+<summary>정답</summary>
+
+- 등호: `col = ?`
+- 범위: `col > ?`, `BETWEEN`
+- 정렬: `ORDER BY col`
+- 접두사 LIKE: `col LIKE 'abc%'`
+
+적합하지 않은 것: 후미 와일드카드 `LIKE '%abc'`, 부정 조건, 함수 적용.
+
+</details>
+
+**Q2.** `INDEX (a, b, c)` 가 다음 쿼리에 활용되는가?
+
+- Q1: `WHERE a = 1 AND b = 2`
+- Q2: `WHERE b = 2`
+- Q3: `WHERE a = 1 AND c = 3`
+
+<details>
+<summary>정답</summary>
+
+- Q1: ✅ leftmost prefix 활용
+- Q2: ❌ a가 빠져 인덱스 미사용 (또는 skip scan, DB·통계 따라)
+- Q3: 부분 활용 — a로 찾고 c는 필터. 복합 인덱스 설계상 좋진 않음
+
+</details>
+
+**Q3.** Covering Index가 성능에 주는 이점은?
+
+<details>
+<summary>정답</summary>
+
+**Index Only Scan** 으로 테이블 접근이 불필요. B-Tree 인덱스만 읽고 필요한 컬럼까지 모두 꺼내 반환. 디스크 I/O와 버퍼 미스를 크게 줄임. 단, 인덱스 크기 증가로 쓰기 비용·공간 비용 상승.
+
+</details>
+
+**Q4.** 다음 쿼리가 인덱스를 못 타는 이유와 해결은?
+
+```sql
+WHERE DATE(created_at) = '2026-04-19'
+```
+
+<details>
+<summary>정답</summary>
+
+`DATE(created_at)` 로 함수 적용되어 원본 컬럼 기반 인덱스 무시.
+
+해결:
+```sql
+WHERE created_at >= '2026-04-19' AND created_at < '2026-04-20'
+```
+
+또는 표현식 인덱스:
+```sql
+CREATE INDEX idx ON t ((created_at::date));
+```
+
+</details>
+
+**Q5.** UUIDv4를 PK로 쓰면 안 되는 이유는?
+
+<details>
+<summary>정답</summary>
+
+InnoDB 같은 Clustered Index DB에서 PK는 데이터의 물리적 순서를 결정. UUIDv4는 무작위 → 삽입 시 B+Tree 리프 페이지가 마구 쪼개지고 재배치 (페이지 분할). 인덱스 단편화 → 캐시 효율 저하 → 삽입·조회 모두 느려짐. 대안: 자동증가 정수, **UUIDv7** (시간 순서 포함), ULID.
+
+</details>
+
+**Q6.** Partial Index가 유용한 시나리오는?
+
+<details>
+<summary>정답</summary>
+
+전체 데이터 중 작은 비율만 자주 조회되는 경우. 예:
+```sql
+CREATE INDEX idx ON orders (user_id) WHERE status = 'pending';
+```
+완료된 주문이 99%면 전체 인덱스는 대부분 낭비. pending만 인덱싱하면 크기·유지비용 모두 절감. 또는 소프트 삭제 `WHERE deleted_at IS NULL`.
+
+</details>
+
+**Q7.** 인덱스를 많이 만드는 것의 부작용 3가지는?
+
+<details>
+<summary>정답</summary>
+
+1. **쓰기 성능 저하**: INSERT/UPDATE/DELETE마다 모든 인덱스 갱신
+2. **공간 비용**: 인덱스가 테이블 크기를 넘을 수도 있음
+3. **옵티마이저 혼란**: 선택지가 많을수록 잘못된 계획 선택 가능. `ANALYZE` 비용도 증가
+4. 백업·복제 대상 크기 증가
+
+</details>
+
+---
+
+## 13. 체크리스트
+
+- [ ] B+Tree가 왜 DB 인덱스로 쓰이는지 설명할 수 있다
+- [ ] 복합 인덱스 컬럼 순서 규칙을 안다
+- [ ] Covering Index와 Index Only Scan의 이점을 안다
+- [ ] GIN, GiST, BRIN, Partial, 표현식 인덱스의 용도를 안다
+- [ ] 인덱스가 안 타는 전형적 패턴(함수, 선두 %) 을 안다
+- [ ] EXPLAIN 결과에서 Seq Scan vs Index Scan을 구분한다
+- [ ] 쓰기 비용을 고려해 인덱스 개수를 통제한다
+
+---
+
+[← 4-3. 정규화](4단계-3-정규화) | [4-5. 트랜잭션 →](4단계-5-트랜잭션)

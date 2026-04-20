@@ -1,0 +1,551 @@
+
+> **목표**: **HTTP 캐싱, 브라우저 캐시 계층, CDN, Service Worker 캐시** 를 이해하고, 각 레벨에서 어떤 전략을 선택해야 할지 결정할 수 있어야 한다.
+> 캐싱은 FE 성능 최적화의 가장 큰 레버다.
+
+* * *
+
+## 0. 캐시가 뭔지 먼저 — 개념부터
+
+### 0-1. 일상의 캐시
+
+- 자주 보는 책을 책상 위에 놓음 (서재까지 가기 귀찮음)
+- 자주 쓰는 계산기 결과를 메모장에 적어둠
+- 커피 맛을 기억해두고 매번 결정하지 않음
+
+**"원본은 멀리 있지만, 가까이에 복사본을 둬서 다시 안 가져온다"**가 캐시다.
+
+### 0-2. 웹에서의 캐시
+
+브라우저가 같은 이미지를 두 번째 요청할 때, **이미 있으니 서버까지 안 간다**. 이게 HTTP 캐시.
+
+```
+첫 방문:  [브라우저] ──GET /logo.png──▶ [서버]  (다운로드)
+두 번째:  [브라우저] (디스크에 있음) → 표시      (네트워크 안 탐)
+```
+
+### 0-3. 캐시가 해결하는 문제
+
+- **속도**: 네트워크 왕복 생략 → 수 ms vs 수백 ms
+- **비용**: 같은 파일 수백만 번 안 내려받아도 됨
+- **서버 부하**: 요청 자체가 감소
+
+### 0-4. 캐시가 만드는 문제 — "오래된 복사본"
+
+> 컴퓨터 과학에는 두 가지 어려운 문제가 있다: **캐시 무효화**와 **이름 짓기**. — Phil Karlton
+
+배포했는데 옛 버전이 보이는 이유? 브라우저/CDN에 **오래된 복사본**이 남아서다. 이 때문에 캐시 정책이 필요하다.
+
+- **얼마나 오래 fresh한지** 선언 (`Cache-Control: max-age=...`)
+- **바뀌었는지 확인하는 방법** 제공 (`ETag`, `Last-Modified`)
+- **파일명 자체를 바꿔 무효화** (`app.a3f9c2.js` 같은 해시 파일명)
+
+이 챕터는 이 3가지 수단을 풀어본다.
+
+### 0-5. 캐시 계층 미리보기
+
+```
+[브라우저 메모리]  ← 현재 탭 세션에서만 유효, 가장 빠름
+      ↓
+[브라우저 디스크]  ← 탭 닫아도 남음
+      ↓
+[Service Worker]   ← JS로 캐시 전략 제어 (PWA)
+      ↓
+[CDN 엣지]         ← 전세계 분산 서버, 사용자 지역 근처
+      ↓
+[Origin 서버]      ← 실제 발신자, 가장 멀고 비쌈
+```
+
+위에서 아래로 갈수록 **느리고 비싸다**. 가능한 한 위에서 끝내는 게 목표.
+
+* * *
+
+## 1. 왜 캐싱인가
+
+- 네트워크 RTT는 수십~수백 ms, 지구 반대편은 300ms+
+- 같은 자원을 매번 내려받으면 **요금·속도·서버 부하** 모두 손해
+- **가장 빠른 요청은 하지 않는 요청**이다
+
+### 캐싱이 걸리는 위치
+
+```
+[브라우저 메모리] → [브라우저 디스크] → [Service Worker] → [CDN Edge] → [CDN Origin Shield] → [Origin Server]
+```
+
+* * *
+
+## 2. HTTP 캐싱의 두 가지 축
+
+### ① Freshness — 얼마나 오래 fresh 한가?
+
+`Cache-Control` 로 제어.
+
+### ② Validation — stale 해진 캐시를 서버에 확인
+
+`ETag`, `Last-Modified` 로 제어.
+
+* * *
+
+## 3. Cache-Control 주요 디렉티브
+
+| 디렉티브 | 의미 |
+|----------|------|
+| `max-age=N` | N초 동안 fresh |
+| `s-maxage=N` | 공유 캐시(CDN)에만 적용되는 max-age |
+| `no-cache` | **캐시는 하되 재사용 전 반드시 서버에 검증** |
+| `no-store` | 절대 저장 안 함 (민감 정보) |
+| `public` | 모든 캐시(공유 포함)가 저장 가능 |
+| `private` | 브라우저만 저장 (CDN 금지) |
+| `immutable` | 절대 변경되지 않음 — 유효 기간 내 검증조차 생략 |
+| `must-revalidate` | stale 되면 반드시 재검증, 네트워크 실패 시 오류 |
+| `stale-while-revalidate=N` | stale 응답을 즉시 주고 N초 내 백그라운드로 갱신 |
+| `stale-if-error=N` | 원본 오류 시 N초 동안 stale 응답 허용 |
+
+### 흔한 조합
+
+```
+# 정적 에셋 (해시된 파일명: app.a1b2c3.js)
+Cache-Control: public, max-age=31536000, immutable
+
+# HTML (항상 검증)
+Cache-Control: no-cache
+
+# 민감 API 응답
+Cache-Control: no-store
+
+# SWR 전략 — 빠른 응답 + 백그라운드 갱신
+Cache-Control: public, max-age=60, stale-while-revalidate=300
+```
+
+* * *
+
+## 4. Freshness 동작
+
+```
+[시각 0s] 서버 응답: Cache-Control: max-age=60
+         → 브라우저 저장
+[시각 30s] 같은 URL 요청
+         → fresh → 네트워크 없이 캐시 반환
+[시각 70s] 같은 URL 요청
+         → stale → 서버 검증 or 재요청
+```
+
+### Age 헤더
+
+CDN이 저장 후 경과 시간을 알려줌. 실제 남은 fresh 시간 = `max-age - Age`.
+
+* * *
+
+## 5. Validation — 조건부 요청
+
+### ETag 방식
+
+```http
+--- 최초 요청 ---
+GET /app.js
+→
+HTTP/1.1 200 OK
+ETag: "abc123"
+Cache-Control: no-cache
+(본문 100KB)
+
+--- 재검증 ---
+GET /app.js
+If-None-Match: "abc123"
+→
+HTTP/1.1 304 Not Modified        ← 본문 없음, 수 바이트
+```
+
+### Last-Modified 방식
+
+```http
+Last-Modified: Mon, 01 Apr 2026 09:00:00 GMT
+
+--- 재검증 ---
+If-Modified-Since: Mon, 01 Apr 2026 09:00:00 GMT
+→ 304 or 200
+```
+
+### ETag vs Last-Modified
+
+| | ETag | Last-Modified |
+|---|------|---------------|
+| 정확도 | 바이트 수준 | 초 수준 |
+| 비용 | 해시 계산 필요 | 파일시스템 stat |
+| Weak ETag (`W/"..."`) | 의미상 동일 허용 (압축 등) | N/A |
+
+둘 다 있으면 ETag 우선.
+
+* * *
+
+## 6. 브라우저 캐시 계층
+
+| 계층 | 특징 |
+|------|------|
+| **Memory Cache** | 탭이 살아 있는 동안. 가장 빠름 |
+| **Disk Cache** | 재시작 후에도 유지 |
+| **HTTP Cache** | `Cache-Control` 기반 |
+| **Service Worker Cache** | 앱이 제어, 오프라인 가능 |
+| **Push Cache** | HTTP/2 서버 푸시 (현재는 거의 사장) |
+
+### DevTools Network 패널의 Size 열
+
+- `(memory cache)` — 즉시, 100% 네트워크 없음
+- `(disk cache)` — 즉시, 디스크 읽기
+- `(ServiceWorker)` — SW가 응답
+- `(prefetch cache)` — preload/prefetch로 미리 받은 것
+- 숫자 — 실제 네트워크 전송
+
+* * *
+
+## 7. 캐시 무효화 전략 — 파일 해싱
+
+### 문제
+
+```html
+<script src="/app.js"></script>
+```
+
+브라우저가 이걸 1년 캐시하면, 업데이트가 반영 안 됨.
+
+### 해법 — 콘텐츠 해시 파일명
+
+```html
+<script src="/app.a1b2c3d4.js"></script>
+```
+
+- 파일 내용이 바뀌면 해시(=파일명)도 바뀜
+- 항상 새 파일로 인식되어 캐시가 깨짐
+- 동시에 `Cache-Control: immutable, max-age=31536000` 으로 1년 캐시 가능
+- HTML은 `no-cache` 라서 새 해시를 가진 `<script>` 태그를 바로 반영
+
+Webpack, Vite, Next.js 모두 기본 지원.
+
+### 쿼리 스트링 방식
+
+```html
+<script src="/app.js?v=2"></script>
+```
+
+- 간단하지만 일부 CDN/프록시가 쿼리 스트링을 캐시 키로 쓰지 않음 → 위험
+- 해시 파일명이 정답
+
+* * *
+
+## 8. Vary 헤더 — 같은 URL, 다른 응답
+
+```
+Vary: Accept-Encoding
+```
+
+같은 URL이라도 `Accept-Encoding` 값이 다르면 **별도 캐시 엔트리** 로 저장.
+
+| 흔한 Vary | 이유 |
+|-----------|------|
+| `Accept-Encoding` | gzip vs br |
+| `Accept-Language` | 다국어 |
+| `User-Agent` | 모바일/데스크탑 (주의: 키 폭발) |
+| `Cookie` | 로그인 상태 (매우 주의) |
+
+### ⚠️ 함정
+
+`Vary: Cookie` 는 쿠키 조합마다 캐시가 생성됨 → 캐시 적중률 0%에 가까워짐. 쿠키가 필요한 응답은 아예 `private` 로 지정하고 CDN 캐시를 피하는 게 낫다.
+
+* * *
+
+## 9. CDN 기초
+
+### CDN이 하는 일
+
+1. **엣지 서버에 콘텐츠 복제** — 사용자 가까운 PoP에서 응답
+2. **DDoS 완화** — 대규모 트래픽 흡수
+3. **TLS 종단** — 인증서 관리 대신
+4. **이미지 최적화** — 포맷 변환(AVIF, WebP), 리사이즈
+5. **엣지 컴퓨팅** — Cloudflare Workers, Vercel Edge Functions
+
+### 주요 CDN
+
+- Cloudflare, Fastly (빠른 엣지 컴퓨팅)
+- Akamai (엔터프라이즈)
+- CloudFront (AWS)
+- Vercel Edge, Netlify Edge (FE 특화)
+
+### CDN 캐시 동작
+
+```
+[브라우저] → [CDN Edge] → [Origin Shield] → [Origin]
+            └ 캐시 Hit  └ Regional Hit    └ Miss
+```
+
+- Edge Hit: 수 ms
+- Origin Miss: 100~500ms
+
+* * *
+
+## 10. CDN 캐시 키
+
+```
+기본: URL + Host + Vary 헤더
+```
+
+CDN별로 설정 가능:
+- 쿼리 스트링 정규화 (정렬, 제거)
+- 쿠키 무시 또는 특정 쿠키만 포함
+- 헤더 선택
+
+### 실전 설정
+
+```
+# Cloudflare
+Cache-Control: public, max-age=3600, s-maxage=86400
+```
+
+- 브라우저는 1시간, CDN은 24시간 보관 → 많은 사용자에게 빠른 응답.
+
+### Purge (퍼지)
+
+- 콘텐츠 긴급 교체 필요 시 CDN API로 URL 지정 삭제
+- **배포 시 반드시 purge**, 또는 해시 파일명으로 purge 불필요하게
+
+* * *
+
+## 11. Service Worker 캐시 전략
+
+(2-7장 복습 + 심화)
+
+```js
+// Cache First
+self.addEventListener('fetch', (e) => {
+  e.respondWith(
+    caches.match(e.request).then((hit) => hit || fetch(e.request))
+  );
+});
+
+// Network First with Fallback
+self.addEventListener('fetch', (e) => {
+  e.respondWith(
+    fetch(e.request)
+      .then((res) => {
+        const clone = res.clone();
+        caches.open('v1').then((cache) => cache.put(e.request, clone));
+        return res;
+      })
+      .catch(() => caches.match(e.request))
+  );
+});
+
+// Stale While Revalidate
+self.addEventListener('fetch', (e) => {
+  e.respondWith(
+    caches.match(e.request).then((cached) => {
+      const fetched = fetch(e.request).then((res) => {
+        caches.open('v1').then((cache) => cache.put(e.request, res.clone()));
+        return res;
+      });
+      return cached || fetched;
+    })
+  );
+});
+```
+
+### 전략 선택 가이드
+
+| 콘텐츠 | 전략 |
+|--------|------|
+| 앱 셸 (HTML, JS, CSS) | Cache First + 해시 파일명 |
+| API 응답 | Network First + 실패 시 cache fallback |
+| 이미지, 폰트 | Stale While Revalidate |
+| 실시간 데이터 | Network Only (캐시 금지) |
+| 오프라인 페이지 | Cache Only |
+
+* * *
+
+## 12. preload / prefetch / preconnect / dns-prefetch
+
+```html
+<!-- 이 페이지에서 곧 쓸 리소스 (높은 우선순위) -->
+<link rel="preload" href="/fonts/inter.woff2" as="font" type="font/woff2" crossorigin>
+
+<!-- 다음 페이지에서 쓸 리소스 (낮은 우선순위) -->
+<link rel="prefetch" href="/next-page.js">
+
+<!-- DNS + TCP + TLS 미리 수행 -->
+<link rel="preconnect" href="https://api.example.com" crossorigin>
+
+<!-- DNS 룩업만 미리 -->
+<link rel="dns-prefetch" href="https://cdn.example.com">
+```
+
+### 우선순위
+
+- `preload` >> `prefetch`
+- `preload` 된 리소스를 실제로 안 쓰면 콘솔 경고 → 대역폭 낭비
+
+* * *
+
+## 13. HTTP/2·HTTP/3 와 캐싱 (복습)
+
+- HTTP/2 multiplexing으로 동시 요청 비용이 크게 줄어 **번들 분할**이 현실적
+- HTTP/3 (QUIC) 는 모바일 네트워크 전환 시에도 세션 유지 → **재연결 비용 절감**
+- 103 Early Hints: 서버가 최종 응답 전에 `Link: </app.css>; rel=preload` 미리 알림
+
+* * *
+
+## 14. 캐싱 설정 치트시트
+
+| 콘텐츠 | Cache-Control | 이유 |
+|--------|---------------|------|
+| HTML | `no-cache` | 항상 최신 요구, ETag로 304 가능 |
+| JS/CSS (해시 파일명) | `public, max-age=31536000, immutable` | 파일명 바뀌면 새 URL |
+| 이미지 (해시 파일명) | `public, max-age=31536000, immutable` | 동상 |
+| favicon | `public, max-age=86400` | 가끔 바뀔 수 있음 |
+| API (공개 데이터) | `public, max-age=60, stale-while-revalidate=300` | SWR |
+| API (사용자별) | `private, no-cache` | 쿠키 세션 |
+| 로그인 정보 | `no-store` | 민감 |
+
+* * *
+
+## 15. ⚠️ 자주 하는 실수
+
+| 실수 | 결과 | 수정 |
+|------|------|------|
+| `Cache-Control` 없음 | 브라우저 휴리스틱 (Last-Modified의 10%) | 명시적 설정 |
+| HTML에 `max-age=1년` | 구버전이 계속 노출 | `no-cache` 또는 짧은 TTL |
+| 해시 없는 파일 + 긴 TTL | 배포 반영 안 됨 | 해시 파일명 + 긴 TTL |
+| `Vary: User-Agent` | 캐시 히트율 0% | 제거 또는 UA 정규화 |
+| CDN 퍼지 없는 배포 | 엣지에 구버전 남음 | 자동 퍼지 파이프라인 |
+| `no-cache` vs `no-store` 혼동 | 민감 정보가 디스크에 저장 | 민감하면 `no-store` |
+| SW 배포 후 구버전 SW가 응답 | 버그 반영 안 됨 | `skipWaiting` + `clients.claim` |
+
+* * *
+
+## 16. 실전 디버깅
+
+### Chrome DevTools Network 패널
+
+- **Disable cache** 체크: 강제 네트워크
+- **Size 열**: 캐시 레벨 확인
+- **Timing 탭**: TTFB, 콘텐츠 다운로드 시간
+- **Response Headers**: `Cache-Control`, `ETag`, `Age`, `CF-Cache-Status` 등
+
+### CDN 헤더
+
+- `CF-Cache-Status: HIT/MISS/EXPIRED/DYNAMIC` (Cloudflare)
+- `x-cache: Hit from cloudfront` (CloudFront)
+- `x-served-by`, `x-cache-hits` (Fastly)
+
+### 서버 시간 확인
+
+```
+Date: Wed, 15 Apr 2026 10:00:00 GMT
+Age: 120
+Cache-Control: max-age=3600
+```
+→ CDN에 저장된 지 120초, 아직 3480초 fresh.
+
+* * *
+
+## 17. 연습 문제
+
+**Q1.** `Cache-Control: no-cache` 와 `Cache-Control: no-store` 의 차이는?
+
+<details>
+<summary>정답</summary>
+
+- `no-cache`: **캐시에는 저장** 하지만 재사용 전 반드시 서버에 검증(`If-None-Match` 등). 304로 빠르게 재사용 가능.
+- `no-store`: **절대 저장하지 않음**. 민감 정보 전용.
+
+직관과 반대이니 주의.
+
+</details>
+
+**Q2.** `app.js` 를 1년 캐시하되 배포 시 즉시 반영하려면?
+
+<details>
+<summary>정답</summary>
+
+**콘텐츠 해시 파일명**(`app.a1b2c3.js`) + `Cache-Control: public, max-age=31536000, immutable`. HTML은 `no-cache` 로 두어 새 해시 파일을 참조하게 한다. 빌드 도구(Webpack, Vite)가 기본 지원.
+
+</details>
+
+**Q3.** `stale-while-revalidate` 는 어떤 상황에 이상적인가?
+
+<details>
+<summary>정답</summary>
+
+**자주 조회되지만 약간의 지연 허용되는 데이터**. 예: 블로그 게시물 목록, 뉴스 헤드라인.
+- 사용자는 stale 응답을 **즉시** 받음 (빠른 체감)
+- CDN/브라우저가 백그라운드에서 갱신
+- 대부분의 사용자가 항상 캐시 히트
+
+단점: 사용자가 1회는 약간 오래된 데이터를 볼 수 있음.
+
+</details>
+
+**Q4.** ETag와 Last-Modified 중 어떤 걸 서버에서 생성해야 하는가?
+
+<details>
+<summary>정답</summary>
+
+보통 **ETag 우선**. 이유:
+- 초 단위보다 정확 (같은 초에 여러 번 수정되는 파일)
+- gzip/br 인코딩 변경 시 Weak ETag로 구분 가능
+- 파일 시스템 mtime이 부정확한 환경(컨테이너, 빌드 시간) 에서도 안전
+
+비용: 해시 계산. 정적 파일은 빌드 시 미리 계산.
+
+</details>
+
+**Q5.** `Vary: Cookie` 를 쓰면 왜 캐시 히트율이 무너지는가?
+
+<details>
+<summary>정답</summary>
+
+쿠키 조합마다 별도 캐시 엔트리가 생성된다. 세션 쿠키, 트래킹 쿠키, A/B 테스트 쿠키 등이 사용자마다 다르므로 사실상 **모든 요청이 고유 엔트리** 가 된다. 해결책은 `private, no-cache` 로 CDN 캐싱을 피하거나, 공개 응답과 사용자별 응답을 URL로 분리하는 것.
+
+</details>
+
+**Q6.** CDN 앞에서 HTML을 5분 캐시하려 한다. 어떤 헤더를 써야 하는가?
+
+<details>
+<summary>정답</summary>
+
+```
+Cache-Control: public, max-age=0, s-maxage=300, stale-while-revalidate=60
+```
+
+- `max-age=0`: 브라우저는 캐시 안 함 (HTML은 항상 최신)
+- `s-maxage=300`: CDN은 5분 캐시
+- `stale-while-revalidate=60`: 5분 직후에도 1분간은 stale 응답 가능
+
+</details>
+
+**Q7.** Service Worker가 캐시에 남긴 구버전 파일 때문에 새 배포가 반영 안 된다. 원인과 해결은?
+
+<details>
+<summary>정답</summary>
+
+원인: SW가 기본적으로 새 버전을 활성화하려면 모든 탭이 닫혀야 함. 구 SW가 Cache First로 응답하면서 구버전 에셋을 계속 내려줌.
+
+해결:
+1. `self.skipWaiting()` + `clients.claim()` 으로 즉시 활성화
+2. 캐시 이름을 버전에 포함 (`v2-assets`) 후 `activate` 에서 구버전 삭제
+3. 앱 셸 HTML은 Network First로 항상 최신 SW 스크립트를 받도록
+4. 위급 시 사용자에게 리로드 프롬프트 노출
+
+</details>
+
+* * *
+
+## 18. 체크리스트
+
+- [ ] `Cache-Control` 주요 디렉티브를 외우고 있다
+- [ ] `no-cache` 와 `no-store` 의 차이를 안다
+- [ ] ETag와 Last-Modified의 동작을 설명할 수 있다
+- [ ] 해시 파일명 + immutable 전략의 이유를 안다
+- [ ] `Vary` 헤더의 의미와 주의점을 안다
+- [ ] CDN 엣지 캐시의 동작을 이해한다
+- [ ] `stale-while-revalidate` 의 UX를 설명할 수 있다
+- [ ] Service Worker 캐시 전략 4가지를 안다
+- [ ] preload/prefetch/preconnect/dns-prefetch를 구분해 쓸 수 있다
+- [ ] 민감 정보에 `no-store` 를 적용한다
+- [ ] 배포 파이프라인에 CDN 퍼지가 포함돼 있다
