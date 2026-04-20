@@ -1,4 +1,4 @@
-const DEFAULT_SITE_URL = "https://junseok-cs-study.vercel.app";
+const DEFAULT_SITE_URL = "https://cs-junseok.vercel.app/";
 
 export const SITE_URL: string = (
   process.env.NEXT_PUBLIC_SITE_URL ?? DEFAULT_SITE_URL
