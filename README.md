@@ -1,4 +1,7 @@
 # [ FE-CS-Study 학습하러가기](https://cs-junseok.vercel.app/)
+<img width="1182" height="438" alt="image" src="https://github.com/user-attachments/assets/a1721f2c-fadc-424c-b93b-507d093aad79" />
+<img width="1166" height="601" alt="image" src="https://github.com/user-attachments/assets/9c99ed5f-58e3-4018-b0a6-bc681773056e" />
+
 ## [wiki](https://cs-junseok.vercel.app/)
 
 비전공 출신 FE 개발자를 위한 CS 집중 스터디. 10주 안에 전공자 수준의 기초 체력을 갖춰야 한다.
