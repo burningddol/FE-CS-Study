@@ -55,10 +55,13 @@ export function HeroBanner({ total }: HeroBannerProps) {
             <br />
             그 아래 <span className="hero-accent">CS</span>까지.
           </h1>
-          <p className="hero-sub">자료구조·네트워크·OS·DB·프레임워크 내부까지.</p>
-          <p className="hero-sub">
-            FE에 필요한 CS 전 영역을 6단계 {total}개 챕터로 정리했어요.
+          <p className="hero-sub">자료구조·네트워크·OS·DB·프레임워크 내부까지.
+            <br/>
+            <span>
+              FE에 필요한 CS 전 영역을 6단계 {total}개 챕터로 정리했어요.
+            </span>
           </p>
+          
           <div className="hero-cta">
             <Link href={primaryHref} className="btn btn-primary btn-lg">
               <svg
