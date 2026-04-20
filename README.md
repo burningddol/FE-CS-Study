@@ -1,4 +1,5 @@
-# [ FE-CS-Study 학습하러가기](https://github.com/burningddol/FE-CS-Study/wiki)
+# [ FE-CS-Study 학습하러가기](https://cs-junseok.vercel.app/)
+## [wiki](https://cs-junseok.vercel.app/)
 
 비전공 출신 FE 개발자를 위한 CS 집중 스터디. 10주 안에 전공자 수준의 기초 체력을 갖춰야 한다.
 
