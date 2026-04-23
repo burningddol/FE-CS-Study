@@ -31,7 +31,7 @@
 
 ## 로드맵
 
-전체 학습 자료는 [GitHub Wiki](https://github.com/burningddol/FE-CS-Study/wiki)에 정리되어 있다. 단계별 요약은 아래 표, 챕터별 상세 내용은 각 위키 페이지를 참조한다.
+전체 학습 자료는 [GitHub Wiki](https://github.com/burningddol/FE-CS-Study/wiki)에 정리되어 있다.[(웹버전 추천)](https://cs-junseok.vercel.app/) 단계별 요약은 아래 표, 챕터별 상세 내용은 각 위키 페이지를 참조한다.
 
 | 단계 | 주제 | 기간 | 핵심 |
 |---|---|---|---|
