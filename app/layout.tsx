@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { GoogleAnalytics } from "@next/third-parties/google";
 import { ProgressProvider } from "@/components/ProgressProvider";
 import {
   OG_IMAGE,
@@ -9,6 +10,9 @@ import {
   SITE_URL,
 } from "@/lib/site";
 import "./globals.css";
+
+const GA_ID = process.env.NEXT_PUBLIC_GA_ID;
+const isProduction = process.env.NODE_ENV === "production";
 
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
@@ -55,6 +59,7 @@ export default function RootLayout({ children }: RootLayoutProps) {
       <body>
         <ProgressProvider>{children}</ProgressProvider>
       </body>
+      {isProduction && GA_ID ? <GoogleAnalytics gaId={GA_ID} /> : null}
     </html>
   );
 }
