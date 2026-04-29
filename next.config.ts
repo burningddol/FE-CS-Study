@@ -15,7 +15,12 @@ const withMDX = createMDX({
       [
         "@shikijs/rehype",
         {
-          theme: "github-dark-default",
+          themes: {
+            light: "github-light",
+            dark: "github-dark-default",
+          },
+          defaultColor: false,
+          cssVariablePrefix: "--shiki-",
           defaultLanguage: "js",
         },
       ],

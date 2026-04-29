@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { BrandMark } from "./BrandMark";
+import { ThemeToggle } from "./ThemeToggle";
 
 type NavKey = "home" | "curriculum" | "progress" | "about";
 
@@ -50,6 +51,7 @@ export function Nav({ active = "home" }: NavProps) {
         >
           GitHub ↗
         </a>
+        <ThemeToggle />
       </div>
     </nav>
   );

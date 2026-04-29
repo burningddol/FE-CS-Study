@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { BrandMark } from "./BrandMark";
+import { ThemeToggle } from "./ThemeToggle";
 
 interface TopBarProps {
   stageLabel: string;
@@ -22,6 +23,9 @@ export function TopBar({ stageLabel, stageSlug, chapterTitle }: TopBarProps) {
         <span className="breadcrumb-sep">/</span>
         <span className="breadcrumb-current">{chapterTitle}</span>
       </nav>
+      <div className="topbar-actions">
+        <ThemeToggle />
+      </div>
     </div>
   );
 }

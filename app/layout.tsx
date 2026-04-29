@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { GoogleAnalytics } from "@next/third-parties/google";
 import { ProgressProvider } from "@/components/ProgressProvider";
+import { ThemeProvider } from "@/components/ThemeProvider";
 import {
   OG_IMAGE,
   SITE_DESCRIPTION,
@@ -13,6 +14,18 @@ import "./globals.css";
 
 const GA_ID = process.env.NEXT_PUBLIC_GA_ID;
 const isProduction = process.env.NODE_ENV === "production";
+
+const themeBootstrapScript = `(() => {
+  try {
+    const stored = localStorage.getItem('theme');
+    const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    const theme = stored === 'light' || stored === 'dark'
+      ? stored
+      : prefersDark ? 'dark' : 'light';
+    document.documentElement.dataset.theme = theme;
+    document.documentElement.style.colorScheme = theme;
+  } catch (_) {}
+})();`;
 
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
@@ -55,9 +68,16 @@ interface RootLayoutProps {
 
 export default function RootLayout({ children }: RootLayoutProps) {
   return (
-    <html lang="ko">
+    <html lang="ko" suppressHydrationWarning>
+      <head>
+        <script
+          dangerouslySetInnerHTML={{ __html: themeBootstrapScript }}
+        />
+      </head>
       <body>
-        <ProgressProvider>{children}</ProgressProvider>
+        <ThemeProvider>
+          <ProgressProvider>{children}</ProgressProvider>
+        </ThemeProvider>
       </body>
       {isProduction && GA_ID ? <GoogleAnalytics gaId={GA_ID} /> : null}
     </html>

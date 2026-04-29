@@ -78,6 +78,7 @@
   --primary-hover: var(--indigo-600);
   --primary-active:var(--indigo-700);
   --primary-bg:    var(--indigo-50);
+  --primary-fg:    var(--indigo-700);
 
   --accent:        var(--amber-500);
   --accent-hover:  var(--amber-600);
@@ -144,6 +145,7 @@
   --primary-hover: var(--indigo-300);
   --primary-active:var(--indigo-200);
   --primary-bg:    rgba(129, 140, 248, 0.12);
+  --primary-fg:    var(--indigo-300);
 
   --accent-bg:     rgba(245, 158, 11, 0.12);
 
