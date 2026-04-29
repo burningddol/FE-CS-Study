@@ -9,7 +9,7 @@ export const SITE_NAME = "JUNSEOK CS study";
 export const SITE_TITLE = `${SITE_NAME} — 프론트엔드 개발자를 위한 컴퓨터 과학`;
 
 export const SITE_DESCRIPTION =
-  "비전공 프론트엔드 개발자를 위한 10주 CS 집중 커리큘럼. 자료구조·네트워크·운영체제·데이터베이스·심화 프론트엔드·소프트웨어 공학까지 6단계 41개 챕터로 정리했어요.";
+  "프론트엔드 개발자를 위한 10주 CS 집중 커리큘럼. 자료구조·네트워크·운영체제·데이터베이스·심화 프론트엔드·소프트웨어 공학까지 6단계 41개 챕터로 정리했어요.";
 
 export const SITE_KEYWORDS = [
   "CS 스터디",
