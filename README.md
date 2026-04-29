@@ -1,8 +1,8 @@
-# [ FE-CS-Study 학습하러가기](https://cs-junseok.vercel.app/)
+# [ FE-CS-Study 학습하러가기](https://cs-junseok.vercel.app/?utm_source=github&utm_medium=referral&utm_campaign=readme)
 <img width="1182" height="438" alt="image" src="https://github.com/user-attachments/assets/a1721f2c-fadc-424c-b93b-507d093aad79" />
 <img width="1166" height="601" alt="image" src="https://github.com/user-attachments/assets/9c99ed5f-58e3-4018-b0a6-bc681773056e" />
 
-## [wiki](https://cs-junseok.vercel.app/)
+## [wiki](https://cs-junseok.vercel.app/?utm_source=github&utm_medium=referral&utm_campaign=readme)
 
 비전공 FE 개발자를 위한 쉽게 푼 CS 집중 스터디.  
 꼭 필요한 핵심만 알짜배기로 정리했다.
@@ -31,7 +31,7 @@
 
 ## 로드맵
 
-전체 학습 자료는 [GitHub Wiki](https://github.com/burningddol/FE-CS-Study/wiki)에 정리되어 있다.[(웹버전 추천)](https://cs-junseok.vercel.app/) 단계별 요약은 아래 표, 챕터별 상세 내용은 각 위키 페이지를 참조한다.
+전체 학습 자료는 [GitHub Wiki](https://github.com/burningddol/FE-CS-Study/wiki)에 정리되어 있다.[(웹버전 추천)](https://cs-junseok.vercel.app/?utm_source=github&utm_medium=referral&utm_campaign=readme) 단계별 요약은 아래 표, 챕터별 상세 내용은 각 위키 페이지를 참조한다.
 
 | 단계 | 주제 | 기간 | 핵심 |
 |---|---|---|---|

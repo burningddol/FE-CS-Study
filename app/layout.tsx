@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { GoogleAnalytics } from "@next/third-parties/google";
+import { GoogleAnalytics } from "@/components/GoogleAnalytics";
 import { ProgressProvider } from "@/components/ProgressProvider";
 import { ThemeProvider } from "@/components/ThemeProvider";
 import {
@@ -39,6 +39,7 @@ export const metadata: Metadata = {
   creator: "junhub98",
   applicationName: SITE_NAME,
   alternates: { canonical: "/" },
+  referrer: "strict-origin-when-cross-origin",
   openGraph: {
     type: "website",
     locale: "ko_KR",
