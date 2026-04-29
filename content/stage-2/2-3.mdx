@@ -243,6 +243,16 @@ const userLoader = new DataLoader(async (ids) => {
 
 ### 3-2. 핸드셰이크
 
+#### 왜 HTTP로 시작하나
+
+WebSocket은 별도 포트·별도 프로토콜로도 만들 수 있었지만 **HTTP 위에서 시작하도록 설계**됐다. 이유:
+
+*   **방화벽·프록시 통과**: 80/443 외엔 막히는 회사·공공망이 많다. 기존 HTTP 포트 그대로 쓰면 도달 가능
+*   **Origin 정책 재사용**: 브라우저의 Same-Origin 검사, 쿠키 자동 전송 같은 기존 보안 메커니즘에 묻어갈 수 있음
+*   **점진적 도입**: 서버가 같은 포트에서 일반 HTTP와 WebSocket을 공존시킬 수 있음 (`Upgrade` 헤더 보고 분기)
+
+#### 메시지 교환
+
 ```
 클라이언트:
 GET /chat HTTP/1.1
@@ -251,15 +261,88 @@ Upgrade: websocket
 Connection: Upgrade
 Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==
 Sec-WebSocket-Version: 13
+Sec-WebSocket-Protocol: chat, json
+Sec-WebSocket-Extensions: permessage-deflate
 
 서버:
 HTTP/1.1 101 Switching Protocols
 Upgrade: websocket
 Connection: Upgrade
 Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=
+Sec-WebSocket-Protocol: chat
 ```
 
-이후부터는 WebSocket 프레임으로 양방향 통신.
+각 헤더의 의미:
+
+| 헤더 | 역할 |
+|------|------|
+| `Upgrade: websocket` + `Connection: Upgrade` | "이 TCP 연결을 HTTP에서 WebSocket으로 갈아탄다"는 신호. 둘 다 있어야 유효 |
+| `Sec-WebSocket-Key` | 클라가 만든 **랜덤 16바이트 base64**. 캐시·재전송 방지용 |
+| `Sec-WebSocket-Version` | 13이 표준 (RFC 6455) |
+| `Sec-WebSocket-Protocol` | 앱 레벨 서브프로토콜 협상. 서버가 지원하는 것 하나를 골라 응답 |
+| `Sec-WebSocket-Extensions` | `permessage-deflate` 같은 압축 확장 |
+| `Sec-WebSocket-Accept` | 서버가 만든 **검증값**. ↓ 알고리즘 |
+
+#### `Sec-WebSocket-Accept` — 어떻게 만드나
+
+서버는 클라가 보낸 `Sec-WebSocket-Key`에 **고정 매직 문자열**(`258EAFA5-E914-47DA-95CA-C5AB0DC85B11`)을 이어붙이고, **SHA-1 해시 → base64 인코딩**해서 응답한다.
+
+```
+accept = base64(sha1(key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"))
+```
+
+> **의미**: 이 한 단계가 있는 덕에 서버는 "나는 WebSocket 명세를 정말로 구현했다"는 것을 증명한다. 우연히 같은 응답을 만들 수 없으므로, **WebSocket 모르는 캐시·프록시가 잘못 응답하는 사고**를 막는다. 보안 인증이 아니라 **명세 호환성 체크**다.
+
+#### `101 Switching Protocols`
+
+매우 드물게 쓰는 HTTP 상태 코드. **"이 응답 이후로는 더 이상 HTTP가 아니다"**라는 뜻. WebSocket·HTTP/2 c-leartext upgrade(`h2c`)에서 보임. 한 번만 발생하고, 그 뒤 같은 TCP 연결은 새 프로토콜의 바이트 스트림이 된다.
+
+#### 핸드셰이크 후 — TCP 위의 프레임 통신
+
+핸드셰이크가 끝나면 같은 TCP 연결은 **WebSocket 프레임**(메시지 단위)을 주고받는 통로가 된다. 더 이상 HTTP 헤더·요청·응답 구조가 아니다.
+
+```
+[FIN][RSV][opcode][MASK][payload-len][masking-key][payload]
+ 1bit  3bit   4bit   1bit   7/16/64bit   0 or 32bit   N bytes
+```
+
+핵심 필드만 추리면:
+
+*   **`opcode`** (4bit): 프레임의 종류 — `0x1` 텍스트, `0x2` 바이너리, `0x8` 종료(close), `0x9` ping, `0xA` pong
+*   **`MASK`** (1bit): 페이로드를 마스킹했는지. **클라→서버는 항상 1**, 서버→클라는 0
+*   **`payload-len`**: 0~125면 7bit 그대로, 126이면 다음 16bit, 127이면 다음 64bit를 사용 (가변 길이 인코딩)
+*   **`masking-key`**: 클라이언트가 보낼 때만 4바이트 랜덤 키. 페이로드를 XOR로 마스킹
+
+#### ⚠️ 클라는 왜 페이로드를 마스킹하나 — Cache Poisoning 방어
+
+이게 WebSocket 명세의 가장 흥미로운 보안 장치다.
+
+WebSocket이 막 등장하던 2010년경, "악성 JS가 평문 HTTP처럼 보이는 페이로드를 보낼 수 있다면, **중간 캐시 프록시를 속여서** 다른 사용자에게 가짜 응답을 캐시시킬 수 있다"는 공격 벡터(Lin-Shung Huang et al., 2011)가 발견됐다. 이걸 **cache poisoning**이라 한다.
+
+해결: **클라이언트가 보내는 모든 페이로드를 4바이트 랜덤 키로 XOR 마스킹**한다. 그러면 같은 평문이라도 매번 다른 바이트열이 되어, 프록시가 HTTP로 오해할 일이 없어진다. 서버→클라는 신뢰된 방향이라 마스킹 안 함.
+
+> **포인트**: 보안이 아니라 **중간 인프라(캐시·프록시) 호환성**을 위한 장치. 암호화는 별개로 `wss://`(TLS)가 담당.
+
+#### Close 프레임과 종료 코드
+
+연결을 정상 종료할 땐 양쪽이 `opcode=0x8` 프레임(close frame)을 주고받는다. 페이로드 첫 2바이트는 **종료 코드**.
+
+| 코드 | 의미 |
+|------|------|
+| `1000` | 정상 종료 |
+| `1001` | "Going Away" — 페이지 새로고침, 서버 셧다운 |
+| `1006` | **비정상 종료 (Close 프레임 없이 TCP 끊김)** — JS 코드에서 가장 자주 보는 값 |
+| `1009` | 메시지가 너무 커서 거부 |
+| `1011` | 서버 내부 오류 |
+
+`ws.onclose = (e) => console.log(e.code, e.reason)`에서 이 코드를 확인할 수 있다. **`1006`이 보이면 보통 네트워크 단절·서버 크래시·idle 타임아웃**.
+
+#### `ws://` vs `wss://`
+
+*   `ws://` — 평문. 로컬 개발 외엔 거의 안 씀
+*   `wss://` — TLS 위. 일반 HTTPS와 같은 인증서·핸드셰이크 사용. **공인 인터넷에선 사실상 필수**
+
+브라우저는 HTTPS 페이지에서 `ws://` 연결을 **혼합 콘텐츠로 차단**한다. 운영 시 `wss://`만 가능하다고 봐도 무방.
 
 ### 3-3. JS 클라이언트
 
